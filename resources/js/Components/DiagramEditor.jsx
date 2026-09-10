@@ -85,6 +85,29 @@ function cleanRichText(html = '') {
     return root.innerHTML;
 }
 
+function insertEditorLineBreak(event, editor, onInsert) {
+    if (event.key !== 'Enter' || event.isComposing) return false;
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode;
+    const anchorElement = anchor?.nodeType === Node.ELEMENT_NODE ? anchor : anchor?.parentElement;
+    if (anchorElement?.closest?.('li')) return false;
+
+    event.preventDefault();
+    const inserted = document.execCommand('insertLineBreak', false, null);
+    if (!inserted && selection?.rangeCount) {
+        const range = selection.getRangeAt(0);
+        const lineBreak = document.createElement('br');
+        range.deleteContents();
+        range.insertNode(lineBreak);
+        range.setStartAfter(lineBreak);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+    onInsert(editor?.innerHTML || '');
+    return true;
+}
+
 function isSvgAsset(url = '', type = '') {
     return type.toLowerCase() === 'svg' || /\.svg(?:[?#]|$)/i.test(url);
 }
@@ -193,6 +216,8 @@ function WorkflowNode({ id, data, selected, width, height }) {
     const [draft, setDraft] = useState(data.richText || data.label);
     const draftRef = useRef(data.richText || data.label);
     const Icon = ICONS[data.icon] || null;
+    const showShadow = data.showShadow ?? (!isPageImage && data.shape !== 'text');
+    const backgroundColor = data.backgroundColor || (isPageImage || data.shape === 'text' ? 'transparent' : '#ffffff');
 
     useEffect(() => { const value = data.richText || data.label; setDraft(value); draftRef.current = value; }, [data.label, data.richText]);
     const finishEditing = () => {
@@ -203,8 +228,8 @@ function WorkflowNode({ id, data, selected, width, height }) {
 
     return (
         <div
-            className={`workflow-node workflow-node--${data.shape} ${data.hideBorder ? 'has-hidden-border' : ''} ${selected ? 'is-selected' : ''}`}
-            style={{ '--node-color': data.color.value, '--node-soft': data.color.soft, width: width || undefined, height: height || undefined }}
+            className={`workflow-node workflow-node--${data.shape} ${data.hideBorder ? 'has-hidden-border' : ''} ${showShadow ? 'has-shadow' : ''} ${selected ? 'is-selected' : ''}`}
+            style={{ '--node-color': data.color.value, '--node-soft': data.color.soft, backgroundColor, width: width || undefined, height: height || undefined }}
             onDoubleClick={(event) => { if (!isPageImage) { event.stopPropagation(); setEditing(true); } }}
         >
             <NodeResizer
@@ -222,9 +247,11 @@ function WorkflowNode({ id, data, selected, width, height }) {
                         <div
                             className="workflow-node__rich-input nodrag nowheel" contentEditable suppressContentEditableWarning autoFocus
                             dangerouslySetInnerHTML={{ __html: draft }}
+                            style={{ color: data.textColor || undefined, fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
                             onInput={(event) => { draftRef.current = event.currentTarget.innerHTML; }} onBlur={finishEditing}
                             onKeyDown={(event) => {
                                 if (event.key === 'Escape') { const value = data.richText || data.label; draftRef.current = value; setDraft(value); setEditing(false); }
+                                else insertEditorLineBreak(event, event.currentTarget, (value) => { draftRef.current = value; });
                                 event.stopPropagation();
                             }}
                         />
@@ -327,6 +354,10 @@ function RichTextControl({ node, onChange }) {
         <div
             ref={editorRef} className="rich-editor" contentEditable suppressContentEditableWarning
             dangerouslySetInnerHTML={{ __html: draft }} onInput={(event) => { draftRef.current = event.currentTarget.innerHTML; }}
+            onKeyDown={(event) => {
+                insertEditorLineBreak(event, event.currentTarget, (value) => { draftRef.current = value; });
+                event.stopPropagation();
+            }}
             onBlur={commit}
         />
     </>;
@@ -335,6 +366,7 @@ function RichTextControl({ node, onChange }) {
 function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdge, onUpload, uploading, onDelete, onClose }) {
     if (!selectedNode && !selectedEdge) return null;
     const isImage = selectedNode && (selectedNode.data.kind === 'image' || selectedNode.data.shape === 'image');
+    const showShadow = selectedNode && (selectedNode.data.showShadow ?? (!isImage && selectedNode.data.shape !== 'text'));
     return (
         <aside className="properties-panel">
             <div className="properties-title">
@@ -354,6 +386,10 @@ function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdg
                     <div><strong>Show border</strong><span>Display the image outline</span></div>
                     <button type="button" role="switch" aria-checked={!selectedNode.data.hideBorder} className={!selectedNode.data.hideBorder ? 'is-on' : ''} onClick={() => onUpdateNode(selectedNode.id, { hideBorder: !selectedNode.data.hideBorder })}><i /></button>
                 </div>
+                <div className="animation-toggle border-toggle">
+                    <div><strong>Show shadow</strong><span>Add depth behind the image</span></div>
+                    <button type="button" role="switch" aria-checked={showShadow} className={showShadow ? 'is-on' : ''} onClick={() => onUpdateNode(selectedNode.id, { showShadow: !showShadow })}><i /></button>
+                </div>
             </> : <>
                 <span className="field-label">Rich text</span>
                 <RichTextControl key={selectedNode.id} node={selectedNode} onChange={(patch) => onUpdateNode(selectedNode.id, patch)} />
@@ -362,10 +398,16 @@ function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdg
                         {[10, 12, 13, 14, 16, 17, 20, 24, 30, 36, 48].map((size) => <option key={size} value={size}>{size} px</option>)}
                     </select></label>
                     <label><span>Text color</span><input type="color" value={selectedNode.data.textColor || '#20212a'} onChange={(event) => onUpdateNode(selectedNode.id, { textColor: event.target.value })} /></label>
+                    <label><span>Background</span><input type="color" value={selectedNode.data.backgroundColor && selectedNode.data.backgroundColor !== 'transparent' ? selectedNode.data.backgroundColor : '#ffffff'} onChange={(event) => onUpdateNode(selectedNode.id, { backgroundColor: event.target.value })} /></label>
+                    <label><span>Fill</span><button type="button" className="no-fill-button" onClick={() => onUpdateNode(selectedNode.id, { backgroundColor: 'transparent' })}>No fill</button></label>
                 </div>
                 <div className="animation-toggle border-toggle">
                     <div><strong>Show border</strong><span>Display the element outline</span></div>
                     <button type="button" role="switch" aria-checked={!selectedNode.data.hideBorder} className={!selectedNode.data.hideBorder ? 'is-on' : ''} onClick={() => onUpdateNode(selectedNode.id, { hideBorder: !selectedNode.data.hideBorder })}><i /></button>
+                </div>
+                <div className="animation-toggle border-toggle">
+                    <div><strong>Show shadow</strong><span>Add depth behind the element</span></div>
+                    <button type="button" role="switch" aria-checked={showShadow} className={showShadow ? 'is-on' : ''} onClick={() => onUpdateNode(selectedNode.id, { showShadow: !showShadow })}><i /></button>
                 </div>
                 <label className="field-label" htmlFor="node-icon">Icon</label>
                 <div className="select-wrap">
@@ -607,7 +649,8 @@ function EditorCanvas({ diagram }) {
                 richText: overrides.richText || overrides.label || definition?.label || 'New shape',
                 shape, icon: overrides.icon || 'none', imageUrl: overrides.imageUrl || null,
                 kind: overrides.kind || null, imageFit: overrides.imageFit || null, mediaType: overrides.mediaType || null,
-                hideBorder: Boolean(overrides.hideBorder),
+                hideBorder: Boolean(overrides.hideBorder), backgroundColor: overrides.backgroundColor || null,
+                showShadow: overrides.showShadow ?? null,
                 color: COLORS[items.length % COLORS.length],
             },
         }]);
@@ -865,8 +908,8 @@ function EditorCanvas({ diagram }) {
             const selectionClasses = selectionVisuals.map((element) => element.classList.contains('is-selected') ? 'is-selected' : 'selected');
             selectionVisuals.forEach((element, index) => element.classList.remove(selectionClasses[index]));
             const borderlessNodes = [...wrapperRef.current.querySelectorAll('.workflow-node.has-hidden-border')];
-            const borderlessStyles = borderlessNodes.map((element) => ({ borderColor: element.style.borderColor, boxShadow: element.style.boxShadow }));
-            borderlessNodes.forEach((element) => { element.style.borderColor = 'transparent'; if (element.classList.contains('workflow-node--image')) element.style.boxShadow = 'none'; });
+            const borderlessStyles = borderlessNodes.map((element) => ({ borderColor: element.style.borderColor }));
+            borderlessNodes.forEach((element) => { element.style.borderColor = 'transparent'; });
             const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
                 const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob);
             });
@@ -937,7 +980,7 @@ function EditorCanvas({ diagram }) {
                 return await new Promise((resolve) => canvas.toBlob(resolve, mime, 0.94));
             } finally {
                 selectionVisuals.forEach((element, index) => element.classList.add(selectionClasses[index]));
-                borderlessNodes.forEach((element, index) => { element.style.borderColor = borderlessStyles[index].borderColor; element.style.boxShadow = borderlessStyles[index].boxShadow; });
+                borderlessNodes.forEach((element, index) => { element.style.borderColor = borderlessStyles[index].borderColor; });
                 animatedPaths.forEach((path, index) => {
                     path.style.animation = originalStyles[index].animation;
                     path.style.strokeDashoffset = originalStyles[index].strokeDashoffset;
