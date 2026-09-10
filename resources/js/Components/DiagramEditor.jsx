@@ -782,7 +782,18 @@ function EditorCanvas({ diagram }) {
         setExporting(true);
         const originalPageId = activePageId;
         const safeName = (filename || title || 'workflow').toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/(^-|-$)/g, '') || 'workflow';
-        const waitForPage = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const waitForPage = async (page) => {
+            for (let attempt = 0; attempt < 15; attempt += 1) {
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+                const nodeElements = [...(wrapperRef.current?.querySelectorAll('.react-flow__node') || [])];
+                const renderedNodeIds = new Set(nodeElements.map((element) => element.getAttribute('data-id')));
+                const renderedEdges = wrapperRef.current?.querySelectorAll('.react-flow__edge').length || 0;
+                if (page.nodes.every((node) => renderedNodeIds.has(node.id)) && renderedEdges >= page.edges.length) {
+                    await new Promise((resolve) => requestAnimationFrame(resolve));
+                    return;
+                }
+            }
+        };
         const download = (blob, name) => {
             const url = URL.createObjectURL(blob);
             const anchor = document.createElement('a');
@@ -794,7 +805,10 @@ function EditorCanvas({ diagram }) {
             if (!viewportElement) throw new Error('Canvas is not ready.');
             const width = page.width || DEFAULT_PAGE_SIZE.width;
             const height = page.height || DEFAULT_PAGE_SIZE.height;
-            const bounds = page.nodes.length ? getNodesBounds(page.nodes) : { x: 0, y: 0, width: width * 0.6, height: height * 0.6 };
+            const pageNodeIds = new Set(page.nodes.map((node) => node.id));
+            const renderedNodes = flow.getNodes().filter((node) => pageNodeIds.has(node.id));
+            const boundsNodes = renderedNodes.length === page.nodes.length ? renderedNodes : page.nodes;
+            const bounds = boundsNodes.length ? getNodesBounds(boundsNodes) : { x: 0, y: 0, width: width * 0.6, height: height * 0.6 };
             const viewport = getViewportForBounds(bounds, width, height, 0.02, 2, 0.12);
             const captureOptions = {
                 width, height, pixelRatio: 1,
@@ -807,6 +821,9 @@ function EditorCanvas({ diagram }) {
             const selectionVisuals = [...wrapperRef.current.querySelectorAll('.workflow-node.is-selected, .react-flow__node.selected, .react-flow__edge.selected')];
             const selectionClasses = selectionVisuals.map((element) => element.classList.contains('is-selected') ? 'is-selected' : 'selected');
             selectionVisuals.forEach((element, index) => element.classList.remove(selectionClasses[index]));
+            const borderlessNodes = [...wrapperRef.current.querySelectorAll('.workflow-node.has-hidden-border')];
+            const borderlessStyles = borderlessNodes.map((element) => ({ borderColor: element.style.borderColor, boxShadow: element.style.boxShadow }));
+            borderlessNodes.forEach((element) => { element.style.borderColor = 'transparent'; if (element.classList.contains('workflow-node--image')) element.style.boxShadow = 'none'; });
             const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
                 const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob);
             });
@@ -876,6 +893,7 @@ function EditorCanvas({ diagram }) {
                 return await new Promise((resolve) => canvas.toBlob(resolve, mime, 0.94));
             } finally {
                 selectionVisuals.forEach((element, index) => element.classList.add(selectionClasses[index]));
+                borderlessNodes.forEach((element, index) => { element.style.borderColor = borderlessStyles[index].borderColor; element.style.boxShadow = borderlessStyles[index].boxShadow; });
                 animatedPaths.forEach((path, index) => {
                     path.style.animation = originalStyles[index].animation;
                     path.style.strokeDashoffset = originalStyles[index].strokeDashoffset;
@@ -890,7 +908,7 @@ function EditorCanvas({ diagram }) {
             const captures = [];
             for (const page of targetPages) {
                 setActivePageId(page.id);
-                await waitForPage();
+                await waitForPage(page);
                 captures.push({ page, blob: await capturePage(page, format === 'pdf' ? 'png' : format) });
             }
             if (format === 'pdf') {
@@ -900,7 +918,7 @@ function EditorCanvas({ diagram }) {
                     const { page, blob } = captures[index];
                     if (index) pdf.addPage([page.width, page.height], page.width >= page.height ? 'landscape' : 'portrait');
                     const dataUrl = await new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(blob); });
-                    pdf.addImage(dataUrl, 'PNG', 0, 0, page.width, page.height, undefined, 'FAST');
+                    pdf.addImage(dataUrl, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
                 }
                 pdf.save(`${safeName}.pdf`);
             } else if (captures.length === 1) {
