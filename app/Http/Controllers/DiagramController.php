@@ -88,6 +88,7 @@ class DiagramController extends Controller
             'pages.*.edges' => ['required_with:pages', 'array'],
             'pages.*.backgroundImage' => ['nullable', 'string', 'max:2048'],
             'pages.*.backgroundName' => ['nullable', 'string', 'max:160'],
+            'pages.*.backgroundType' => ['nullable', 'string', 'max:12'],
             'pages.*.backgroundFit' => ['nullable', 'in:cover,contain,fill'],
         ]);
     }

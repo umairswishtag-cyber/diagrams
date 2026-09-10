@@ -15,6 +15,7 @@ import { toCanvas, toSvg } from 'html-to-image';
 import { GIFEncoder, applyPalette, quantize } from 'gifenc';
 import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
+import 'svg2pdf.js';
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 const ACTIONS = createContext({ updateNode: () => {}, beginResize: () => {}, endResize: () => {} });
@@ -82,6 +83,10 @@ function cleanRichText(html = '') {
         });
     });
     return root.innerHTML;
+}
+
+function isSvgAsset(url = '', type = '') {
+    return type.toLowerCase() === 'svg' || /\.svg(?:[?#]|$)/i.test(url);
 }
 
 function createPage(number, content = {}) {
@@ -601,7 +606,7 @@ function EditorCanvas({ diagram }) {
                 label: overrides.label || definition?.label || 'New shape',
                 richText: overrides.richText || overrides.label || definition?.label || 'New shape',
                 shape, icon: overrides.icon || 'none', imageUrl: overrides.imageUrl || null,
-                kind: overrides.kind || null, imageFit: overrides.imageFit || null,
+                kind: overrides.kind || null, imageFit: overrides.imageFit || null, mediaType: overrides.mediaType || null,
                 hideBorder: Boolean(overrides.hideBorder),
                 color: COLORS[items.length % COLORS.length],
             },
@@ -664,7 +669,7 @@ function EditorCanvas({ diagram }) {
         const suffix = `-${Date.now()}`;
         const page = createPage(pages.length + 1, {
             name: `${activePage.name} copy`, width: activePage.width, height: activePage.height,
-            backgroundImage: activePage.backgroundImage, backgroundName: activePage.backgroundName, backgroundFit: activePage.backgroundFit,
+            backgroundImage: activePage.backgroundImage, backgroundName: activePage.backgroundName, backgroundFit: activePage.backgroundFit, backgroundType: activePage.backgroundType,
             nodes: activePage.nodes.map((node) => ({ ...node, id: `${node.id}${suffix}` })),
             edges: activePage.edges.map((edge) => ({ ...edge, id: `${edge.id}${suffix}`, source: `${edge.source}${suffix}`, target: `${edge.target}${suffix}` })),
         });
@@ -719,7 +724,7 @@ function EditorCanvas({ diagram }) {
             const response = await fetch(route('diagram-assets.store'), { method: 'POST', headers: { Accept: 'application/json' }, body: form });
             const result = await response.json();
             if (!response.ok) throw new Error(result.message || 'Upload failed.');
-            if (targetNodeId) updateNode(targetNodeId, { imageUrl: result.url, icon: 'none' });
+            if (targetNodeId) updateNode(targetNodeId, { imageUrl: result.url, mediaType: result.type, icon: 'none' });
             else {
                 const dimensions = await new Promise((resolve) => {
                     const image = new Image();
@@ -730,7 +735,7 @@ function EditorCanvas({ diagram }) {
                 const scale = Math.min(1, 420 / dimensions.width, 300 / dimensions.height);
                 addNodeFromSidebar('image', {
                     kind: 'image', label: result.name || file.name || 'Page image', imageUrl: result.url,
-                    imageFit: 'contain', hideBorder: true,
+                    imageFit: 'contain', mediaType: result.type, hideBorder: true,
                     style: { width: Math.max(60, Math.round(dimensions.width * scale)), height: Math.max(60, Math.round(dimensions.height * scale)) },
                 });
             }
@@ -749,7 +754,7 @@ function EditorCanvas({ diagram }) {
             const response = await fetch(route('diagram-assets.store'), { method: 'POST', headers: { Accept: 'application/json' }, body: form });
             const result = await response.json();
             if (!response.ok) throw new Error(result.message || 'Import failed.');
-            updatePageBackground({ backgroundImage: result.url, backgroundName: result.name || file.name, backgroundFit: 'cover' });
+            updatePageBackground({ backgroundImage: result.url, backgroundName: result.name || file.name, backgroundType: result.type, backgroundFit: 'cover' });
         } catch (error) {
             window.alert(error.message || 'The page image could not be imported.');
         } finally {
@@ -781,7 +786,24 @@ function EditorCanvas({ diagram }) {
     const exportDiagram = async (format, pageIds = []) => {
         setExporting(true);
         const originalPageId = activePageId;
+        const pdfVectorLayouts = new Map();
+        const svgSourceCache = new Map();
         const safeName = (filename || title || 'workflow').toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/(^-|-$)/g, '') || 'workflow';
+        const loadSvgSource = async (url) => {
+            if (!svgSourceCache.has(url)) {
+                svgSourceCache.set(url, (async () => {
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error(`Could not load SVG (${response.status}).`);
+                    const source = await response.text();
+                    const documentNode = new DOMParser().parseFromString(source, 'image/svg+xml');
+                    if (documentNode.querySelector('parsererror') || documentNode.documentElement?.tagName?.toLowerCase() !== 'svg') {
+                        throw new Error('The uploaded SVG is not valid.');
+                    }
+                    return source;
+                })());
+            }
+            return svgSourceCache.get(url);
+        };
         const waitForPage = async (page) => {
             for (let attempt = 0; attempt < 15; attempt += 1) {
                 await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -810,11 +832,32 @@ function EditorCanvas({ diagram }) {
             const boundsNodes = renderedNodes.length === page.nodes.length ? renderedNodes : page.nodes;
             const bounds = boundsNodes.length ? getNodesBounds(boundsNodes) : { x: 0, y: 0, width: width * 0.6, height: height * 0.6 };
             const viewport = getViewportForBounds(bounds, width, height, 0.02, 2, 0.12);
+            const vectorItems = [];
+            if (targetFormat === 'pdf') {
+                const renderedById = new Map(renderedNodes.map((node) => [node.id, node]));
+                const candidates = page.nodes.filter((node) => (node.data?.kind === 'image' || node.data?.shape === 'image')
+                    && node.data?.imageUrl && isSvgAsset(node.data.imageUrl, node.data.mediaType));
+                for (const storedNode of candidates) {
+                    try {
+                        vectorItems.push({ node: renderedById.get(storedNode.id) || storedNode, source: await loadSvgSource(storedNode.data.imageUrl) });
+                    } catch (error) {
+                        console.warn(`SVG ${storedNode.id} will use the raster fallback.`, error);
+                    }
+                }
+                pdfVectorLayouts.set(page.id, { viewport, items: vectorItems });
+            }
+            const vectorNodeIds = new Set(vectorItems.map(({ node }) => node.id));
             const captureOptions = {
                 width, height, pixelRatio: 1,
                 style: { width: `${width}px`, height: `${height}px`, transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` },
-                filter: (element) => !element?.classList?.contains('react-flow__resize-control')
-                    && !element?.classList?.contains('workflow-handle'),
+                filter: (element) => {
+                    if (element?.classList?.contains('react-flow__resize-control') || element?.classList?.contains('workflow-handle')) return false;
+                    if (targetFormat === 'pdf' && element?.classList?.contains('workflow-node__page-image')) {
+                        const nodeId = element.closest?.('.react-flow__node')?.getAttribute('data-id');
+                        if (vectorNodeIds.has(nodeId)) return false;
+                    }
+                    return true;
+                },
             };
             const animatedPaths = [...wrapperRef.current.querySelectorAll('.animated-flow-edge')];
             const originalStyles = animatedPaths.map((path) => ({ animation: path.style.animation, strokeDashoffset: path.style.strokeDashoffset }));
@@ -889,7 +932,8 @@ function EditorCanvas({ diagram }) {
                     const gif = GIFEncoder(); gif.writeFrame(applyPalette(image.data, palette), canvas.width, canvas.height, { palette }); gif.finish();
                     return new Blob([gif.bytes()], { type: 'image/gif' });
                 }
-                const mime = targetFormat === 'jpeg' ? 'image/jpeg' : `image/${targetFormat}`;
+                const rasterFormat = targetFormat === 'pdf' ? 'png' : targetFormat;
+                const mime = rasterFormat === 'jpeg' ? 'image/jpeg' : `image/${rasterFormat}`;
                 return await new Promise((resolve) => canvas.toBlob(resolve, mime, 0.94));
             } finally {
                 selectionVisuals.forEach((element, index) => element.classList.add(selectionClasses[index]));
@@ -909,7 +953,7 @@ function EditorCanvas({ diagram }) {
             for (const page of targetPages) {
                 setActivePageId(page.id);
                 await waitForPage(page);
-                captures.push({ page, blob: await capturePage(page, format === 'pdf' ? 'png' : format) });
+                captures.push({ page, blob: await capturePage(page, format) });
             }
             if (format === 'pdf') {
                 const first = captures[0].page;
@@ -918,7 +962,32 @@ function EditorCanvas({ diagram }) {
                     const { page, blob } = captures[index];
                     if (index) pdf.addPage([page.width, page.height], page.width >= page.height ? 'landscape' : 'portrait');
                     const dataUrl = await new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(blob); });
-                    pdf.addImage(dataUrl, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const pdfHeight = pdf.internal.pageSize.getHeight();
+                    pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+                    const vectorLayout = pdfVectorLayouts.get(page.id);
+                    for (const { node, source } of vectorLayout?.items || []) {
+                        const documentNode = new DOMParser().parseFromString(source, 'image/svg+xml');
+                        const svgElement = documentNode.documentElement;
+                        const fit = node.data?.imageFit || 'contain';
+                        svgElement.setAttribute('preserveAspectRatio', fit === 'fill' ? 'none' : fit === 'cover' ? 'xMidYMid slice' : 'xMidYMid meet');
+                        const position = node.positionAbsolute || node.position || { x: 0, y: 0 };
+                        const nodeWidth = node.measured?.width || node.width || Number(node.style?.width) || 320;
+                        const nodeHeight = node.measured?.height || node.height || Number(node.style?.height) || 200;
+                        const borderInset = 2;
+                        const x = vectorLayout.viewport.x + (position.x + borderInset) * vectorLayout.viewport.zoom;
+                        const y = vectorLayout.viewport.y + (position.y + borderInset) * vectorLayout.viewport.zoom;
+                        const vectorWidth = Math.max(1, nodeWidth - borderInset * 2) * vectorLayout.viewport.zoom;
+                        const vectorHeight = Math.max(1, nodeHeight - borderInset * 2) * vectorLayout.viewport.zoom;
+                        await pdf.svg(svgElement, {
+                            x: x * (pdfWidth / page.width),
+                            y: y * (pdfHeight / page.height),
+                            width: vectorWidth * (pdfWidth / page.width),
+                            height: vectorHeight * (pdfHeight / page.height),
+                            loadExternalStyleSheets: false,
+                            loadImages: true,
+                        });
+                    }
                 }
                 pdf.save(`${safeName}.pdf`);
             } else if (captures.length === 1) {
@@ -963,7 +1032,7 @@ function EditorCanvas({ diagram }) {
                             page={activePage} elementCount={nodes.length} onResize={resizePage}
                             onAddImage={uploadAsset} onImportBackground={uploadPageBackground} importing={uploading}
                             onBackgroundFit={(backgroundFit) => updatePageBackground({ backgroundFit })}
-                            onRemoveBackground={() => updatePageBackground({ backgroundImage: null, backgroundName: null })}
+                            onRemoveBackground={() => updatePageBackground({ backgroundImage: null, backgroundName: null, backgroundType: null })}
                         />
                         <ArtboardFrame page={activePage}><ReactFlow
                             key={activePage.id}
