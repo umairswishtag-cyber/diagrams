@@ -1,0 +1,41 @@
+scalar JSON @scalar(class: "App\\GraphQL\\Scalars\\JSON")
+
+type DiagramOwner {
+    id: ID!
+    name: String!
+    email: String!
+    role: String!
+}
+
+type Diagram {
+    id: ID!
+    title: String!
+    filename: String!
+    nodes: JSON!
+    edges: JSON!
+    pages: JSON
+    node_count: Int!
+    edge_count: Int!
+    owner: DiagramOwner
+    created_at: String
+    updated_at: String
+}
+
+input DiagramInput {
+    title: String!
+    filename: String!
+    nodes: JSON!
+    edges: JSON!
+    pages: JSON
+}
+
+type Query {
+    diagrams: [Diagram!]! @guard @field(resolver: "App\\GraphQL\\Queries\\Diagrams")
+    diagram(id: ID!): Diagram! @guard @field(resolver: "App\\GraphQL\\Queries\\Diagram")
+}
+
+type Mutation {
+    createDiagram(input: DiagramInput!): Diagram! @guard @field(resolver: "App\\GraphQL\\Mutations\\CreateDiagram")
+    updateDiagram(id: ID!, input: DiagramInput!): Diagram! @guard @field(resolver: "App\\GraphQL\\Mutations\\UpdateDiagram")
+    deleteDiagram(id: ID!): Boolean! @guard @field(resolver: "App\\GraphQL\\Mutations\\DeleteDiagram")
+}

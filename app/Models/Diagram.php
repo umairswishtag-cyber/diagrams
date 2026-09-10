@@ -4,12 +4,18 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Diagram extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['title', 'filename', 'nodes', 'edges', 'pages'];
+    protected $fillable = ['user_id', 'title', 'filename', 'nodes', 'edges', 'pages'];
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
 
     protected function casts(): array
     {

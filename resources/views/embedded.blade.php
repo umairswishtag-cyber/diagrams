@@ -1,6 +1,7 @@
 @extends('shopify-app::layouts.default')
 
 @section('styles')
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     @routes
     @viteReactRefresh
     @vite(['resources/js/app.jsx'])

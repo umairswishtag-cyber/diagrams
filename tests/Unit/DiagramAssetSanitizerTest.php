@@ -2,10 +2,9 @@
 
 namespace Tests\Unit;
 
-use App\Http\Controllers\DiagramAssetController;
+use App\Services\DiagramAssetService;
 use Illuminate\Validation\ValidationException;
 use PHPUnit\Framework\Attributes\Test;
-use ReflectionMethod;
 use Tests\TestCase;
 
 class DiagramAssetSanitizerTest extends TestCase
@@ -61,8 +60,6 @@ class DiagramAssetSanitizerTest extends TestCase
 
     private function sanitize(string $svg): string
     {
-        $method = new ReflectionMethod(DiagramAssetController::class, 'sanitizeSvg');
-
-        return $method->invoke(new DiagramAssetController, $svg);
+        return (new DiagramAssetService)->sanitizeSvg($svg);
     }
 }

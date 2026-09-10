@@ -5,17 +5,20 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
-    AlignCenter, AlignLeft, AlignRight, AppWindow, ArrowLeft, Bold, Box, Braces, Check,
-    ChevronDown, Circle as CircleIcon, Cloud, Code2, Copy, Database, Diamond, Download,
-    FileText, GitBranch, Grid2X2, Image as ImageIcon, Italic, List, ListOrdered, Menu,
-    MessageSquareText, MousePointer2, Network, PanelBottom, Play, Plus, Redo2, Save,
-    Server, Settings, Sparkles, Square, Trash2, Type, Underline, Undo2, Upload, Users, X, Zap,
+    AlignCenter, AlignLeft, AlignRight, AppWindow, ArrowDown, ArrowLeft, ArrowUp, Bold, Box,
+    Braces, BringToFront, Check, ChevronDown, Circle as CircleIcon, Cloud, Code2, Copy,
+    Database, Diamond, Download, FileText, GitBranch, Grid2X2, GripVertical,
+    Image as ImageIcon, Italic, Layers3, List, ListOrdered, LogOut, Menu, MessageSquareText,
+    MousePointer2, Network, PanelBottom, Play, Plus, Redo2, Save, SendToBack, Server,
+    Settings, Shapes, Sparkles, Square, Trash2, Type, Underline, Undo2, Upload, Users, X, Zap,
 } from 'lucide-react';
 import { toCanvas, toSvg } from 'html-to-image';
 import { GIFEncoder, applyPalette, quantize } from 'gifenc';
 import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
 import 'svg2pdf.js';
+import { graphqlRequest } from '@/Services/graphql';
+import { Link, usePage } from '@inertiajs/react';
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 const ACTIONS = createContext({ updateNode: () => {}, beginResize: () => {}, endResize: () => {} });
@@ -112,6 +115,17 @@ function isSvgAsset(url = '', type = '') {
     return type.toLowerCase() === 'svg' || /\.svg(?:[?#]|$)/i.test(url);
 }
 
+function withCsrf(headers = {}) {
+    const cookieToken = document.cookie
+        .split('; ')
+        .find((cookie) => cookie.startsWith('XSRF-TOKEN='))
+        ?.slice('XSRF-TOKEN='.length);
+    if (cookieToken) return { ...headers, 'X-XSRF-TOKEN': decodeURIComponent(cookieToken) };
+
+    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    return token ? { ...headers, 'X-CSRF-TOKEN': token } : headers;
+}
+
 function createPage(number, content = {}) {
     return {
         id: `page-${Date.now()}-${number}-${Math.round(Math.random() * 999)}`,
@@ -123,6 +137,15 @@ function createPage(number, content = {}) {
     };
 }
 
+function applyLayerIndexes(nodes = []) {
+    return nodes.map((node, index) => ({ ...node, zIndex: index + 1 }));
+}
+
+function normalizeLayerNodes(nodes = []) {
+    return applyLayerIndexes([...nodes]
+        .sort((first, second) => (Number(first.zIndex) || 0) - (Number(second.zIndex) || 0)));
+}
+
 function loadPages(diagram) {
     const storedPages = Array.isArray(diagram?.pages) && diagram.pages.length ? diagram.pages : null;
     const source = storedPages || [createPage(1, { nodes: diagram?.nodes || seedNodes, edges: diagram?.edges || seedEdges })];
@@ -132,7 +155,7 @@ function loadPages(diagram) {
         name: page.name || `Page ${index + 1}`,
         width: Number(page.width) || DEFAULT_PAGE_SIZE.width,
         height: Number(page.height) || DEFAULT_PAGE_SIZE.height,
-        nodes: Array.isArray(page.nodes) ? page.nodes : [],
+        nodes: normalizeLayerNodes(Array.isArray(page.nodes) ? page.nodes : []),
         edges: Array.isArray(page.edges) ? page.edges : [],
     }));
 }
@@ -282,13 +305,49 @@ function ToolButton({ icon: Icon, label, onClick, active, disabled }) {
     );
 }
 
-function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed }) {
+function LayerList({ nodes, selectedNodeId, onSelectNode, onMoveLayer, onReorderLayer }) {
+    const frontToBack = [...nodes].reverse();
+
+    return <div className="layers-view">
+        <div className="sidebar-heading"><p>LAYERS</p><span>Front layers appear first</span></div>
+        {frontToBack.length ? <div className="layer-list">
+            {frontToBack.map((node, index) => {
+                const isImage = node.data.kind === 'image' || node.data.shape === 'image';
+                const label = plainText(node.data.richText || node.data.label || '').trim() || (isImage ? 'Image' : 'Untitled layer');
+                return <div
+                    key={node.id} draggable className={`layer-row ${selectedNodeId === node.id ? 'is-selected' : ''}`}
+                    onDragStart={(event) => { event.dataTransfer.setData('application/workflow-layer', node.id); event.dataTransfer.effectAllowed = 'move'; }}
+                    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
+                    onDrop={(event) => { event.preventDefault(); const sourceId = event.dataTransfer.getData('application/workflow-layer'); if (sourceId) onReorderLayer(sourceId, node.id); }}
+                    onClick={() => onSelectNode(node.id)}
+                >
+                    <GripVertical size={13} className="layer-grip" />
+                    <span className="layer-thumbnail">{isImage && node.data.imageUrl ? <img src={node.data.imageUrl} alt="" /> : node.data.shape === 'text' ? <Type size={14} /> : <Shapes size={14} />}</span>
+                    <span className="layer-name"><strong>{label}</strong><small>{isImage ? 'Image' : node.data.shape || 'Shape'}</small></span>
+                    <span className="layer-row-actions">
+                        <button type="button" disabled={index === 0} title="Move forward" onClick={(event) => { event.stopPropagation(); onMoveLayer(node.id, 'forward'); }}><ArrowUp size={12} /></button>
+                        <button type="button" disabled={index === frontToBack.length - 1} title="Move backward" onClick={(event) => { event.stopPropagation(); onMoveLayer(node.id, 'backward'); }}><ArrowDown size={12} /></button>
+                    </span>
+                </div>;
+            })}
+        </div> : <div className="layers-empty"><Layers3 size={25} /><strong>No layers yet</strong><span>Add a shape, text, or image.</span></div>}
+        <p className="layers-help">Drag layers to reorder them. The top item appears in front.</p>
+    </div>;
+}
+
+function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed, nodes, selectedNodeId, onSelectNode, onMoveLayer, onReorderLayer }) {
+    const [view, setView] = useState('elements');
     return (
         <aside className={`editor-sidebar ${collapsed ? 'is-collapsed' : ''}`}>
             <button className="sidebar-collapse" onClick={() => setCollapsed(!collapsed)} aria-label="Toggle sidebar">
                 {collapsed ? <Menu size={18} /> : <X size={18} />}
             </button>
             {!collapsed && <>
+                <div className="sidebar-tabs">
+                    <button type="button" className={view === 'elements' ? 'is-active' : ''} onClick={() => setView('elements')}><Shapes size={14} /> Elements</button>
+                    <button type="button" className={view === 'layers' ? 'is-active' : ''} onClick={() => setView('layers')}><Layers3 size={14} /> Layers <b>{nodes.length}</b></button>
+                </div>
+                {view === 'elements' ? <>
                 <div className="sidebar-heading"><p>ELEMENTS</p><span>Drag or click to add</span></div>
                 <div className="shape-grid">
                     {SHAPES.map(({ type, label, icon: Icon }) => (
@@ -317,6 +376,7 @@ function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed }) {
                     <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,.gif,image/*" disabled={uploading} onChange={(event) => { onUpload(event.target.files?.[0]); event.target.value = ''; }} />
                 </label>
                 <div className="sidebar-tip"><Sparkles size={16} /><p><strong>Pro tip</strong><br />Double-click text to edit it. Use the style panel for lists, emphasis and alignment.</p></div>
+                </> : <LayerList nodes={nodes} selectedNodeId={selectedNodeId} onSelectNode={onSelectNode} onMoveLayer={onMoveLayer} onReorderLayer={onReorderLayer} />}
             </>}
         </aside>
     );
@@ -366,7 +426,20 @@ function RichTextControl({ node, onChange }) {
     </>;
 }
 
-function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdge, onUpload, uploading, onDelete, onClose }) {
+function LayerControls({ node, onMoveLayer }) {
+    return <div className="layer-controls">
+        <span className="field-label">Layer position</span>
+        <div>
+            <button type="button" onClick={() => onMoveLayer(node.id, 'front')} title="Bring to front"><BringToFront size={14} /><span>Front</span></button>
+            <button type="button" onClick={() => onMoveLayer(node.id, 'forward')} title="Move one layer forward"><ArrowUp size={14} /><span>Forward</span></button>
+            <button type="button" onClick={() => onMoveLayer(node.id, 'backward')} title="Move one layer backward"><ArrowDown size={14} /><span>Backward</span></button>
+            <button type="button" onClick={() => onMoveLayer(node.id, 'back')} title="Send to back"><SendToBack size={14} /><span>Back</span></button>
+        </div>
+        <small>Shortcuts: Ctrl/Cmd + [ or ]</small>
+    </div>;
+}
+
+function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdge, onUpload, uploading, onMoveLayer, onDelete, onClose }) {
     if (!selectedNode && !selectedEdge) return null;
     const isImage = selectedNode && (selectedNode.data.kind === 'image' || selectedNode.data.shape === 'image');
     const showShadow = selectedNode && (selectedNode.data.showShadow ?? (!isImage && selectedNode.data.shape !== 'text'));
@@ -452,6 +525,7 @@ function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdg
                     <button type="button" role="switch" aria-checked={Boolean(selectedEdge.data?.animated)} className={selectedEdge.data?.animated ? 'is-on' : ''} onClick={() => onUpdateEdge(selectedEdge.id, { animated: !selectedEdge.data?.animated, ...(!selectedEdge.data?.animated && selectedEdge.data?.lineStyle === 'solid' ? { lineStyle: 'dashed' } : {}) })}><i /></button>
                 </div>
             </>}
+            {selectedNode && <LayerControls node={selectedNode} onMoveLayer={onMoveLayer} />}
             <button type="button" className="delete-button" onClick={onDelete}><Trash2 size={16} /> Delete {selectedNode ? 'shape' : 'connector'}</button>
         </aside>
     );
@@ -530,13 +604,13 @@ function PageControls({ page, elementCount, onResize, onAddImage, onImportBackgr
                 <label className="page-import-button page-add-image"><ImageIcon size={14} />{importing ? 'Uploading…' : 'Add image'}
                     <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,.gif,image/*" disabled={importing} onChange={(event) => { onAddImage(event.target.files?.[0]); event.target.value = ''; }} />
                 </label>
-                <label className="page-import-button"><Upload size={14} />{importing ? 'Importing…' : 'Page background'}
+                {/* <label className="page-import-button"><Upload size={14} />{importing ? 'Importing…' : 'Page background'}
                     <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,image/svg+xml,image/png,image/jpeg,image/webp" disabled={importing} onChange={(event) => { onImportBackground(event.target.files?.[0]); event.target.value = ''; }} />
                 </label>
                 {page.backgroundImage && <>
                     <label>Image fit<select value={page.backgroundFit || 'cover'} onChange={(event) => onBackgroundFit(event.target.value)}><option value="cover">Cover</option><option value="contain">Contain</option><option value="fill">Stretch</option></select></label>
                     <button type="button" className="remove-page-image" onClick={onRemoveBackground} title="Remove page image"><X size={14} /></button>
-                </>}
+                </>} */}
                 <label>Page size<select value={selectedPreset} onChange={(event) => {
                     setSelectedPreset(event.target.value);
                     const size = PAGE_SIZES[event.target.value];
@@ -580,6 +654,8 @@ function ArtboardFrame({ page, children }) {
 
 function EditorCanvas({ diagram }) {
     const flow = useReactFlow();
+    const { auth } = usePage().props;
+    const draftStorageKey = `flowcraft-diagram:${auth?.user?.id || 'anonymous'}`;
     const initialPages = useMemo(() => loadPages(diagram), [diagram]);
     const [pages, setPages] = useState(initialPages);
     const [activePageId, setActivePageId] = useState(initialPages[0].id);
@@ -612,7 +688,7 @@ function EditorCanvas({ diagram }) {
     useEffect(() => {
         if (diagram) return;
         try {
-            const stored = JSON.parse(localStorage.getItem('flowcraft-diagram'));
+            const stored = JSON.parse(localStorage.getItem(draftStorageKey));
             if (stored?.pages?.length || (stored?.nodes && stored?.edges)) {
                 const restoredPages = loadPages(stored);
                 setPages(restoredPages);
@@ -623,7 +699,7 @@ function EditorCanvas({ diagram }) {
         } catch (error) {
             console.warn('Saved diagram could not be loaded.', error);
         }
-    }, [diagram]);
+    }, [diagram, draftStorageKey]);
 
     const nodeTypes = useMemo(() => ({ workflow: MemoWorkflowNode }), []);
     const edgeTypes = useMemo(() => ({ workflowEdge: MemoWorkflowEdge }), []);
@@ -646,7 +722,7 @@ function EditorCanvas({ diagram }) {
         const definition = SHAPES.find((item) => item.type === shape);
         const id = `node-${Date.now()}-${Math.round(Math.random() * 999)}`;
         setNodes((items) => [...items, {
-            id, type: 'workflow', position, ...(overrides.style ? { style: overrides.style } : {}),
+            id, type: 'workflow', position, zIndex: Math.max(0, ...items.map((node) => Number(node.zIndex) || 0)) + 1, ...(overrides.style ? { style: overrides.style } : {}),
             data: {
                 label: overrides.label || definition?.label || 'New shape',
                 richText: overrides.richText || overrides.label || definition?.label || 'New shape',
@@ -749,16 +825,55 @@ function EditorCanvas({ diagram }) {
         setFuture([]); setSaved(false); dragStart.current = null;
     }, []);
 
+    const moveLayer = useCallback((nodeId, direction) => {
+        remember();
+        setNodes((items) => {
+            const currentIndex = items.findIndex((node) => node.id === nodeId);
+            if (currentIndex < 0) return items;
+            const targetIndex = direction === 'front'
+                ? items.length - 1
+                : direction === 'back'
+                    ? 0
+                    : direction === 'forward'
+                        ? Math.min(items.length - 1, currentIndex + 1)
+                        : Math.max(0, currentIndex - 1);
+            if (targetIndex === currentIndex) return items;
+            const ordered = [...items];
+            const [moving] = ordered.splice(currentIndex, 1);
+            ordered.splice(targetIndex, 0, moving);
+            return applyLayerIndexes(ordered);
+        });
+    }, [remember, setNodes]);
+
+    const reorderLayer = useCallback((sourceId, targetId) => {
+        if (sourceId === targetId) return;
+        remember();
+        setNodes((items) => {
+            const sourceIndex = items.findIndex((node) => node.id === sourceId);
+            const targetIndex = items.findIndex((node) => node.id === targetId);
+            if (sourceIndex < 0 || targetIndex < 0) return items;
+            const ordered = [...items];
+            const [moving] = ordered.splice(sourceIndex, 1);
+            const targetAfterRemoval = ordered.findIndex((node) => node.id === targetId);
+            ordered.splice(sourceIndex < targetIndex ? targetAfterRemoval + 1 : targetAfterRemoval, 0, moving);
+            return applyLayerIndexes(ordered);
+        });
+    }, [remember, setNodes]);
+
     useEffect(() => {
         const onKeyDown = (event) => {
             const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
             if ((event.key === 'Delete' || event.key === 'Backspace') && !typing) deleteSelection();
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) { event.preventDefault(); undo(); }
             if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) { event.preventDefault(); redo(); }
+            if ((event.ctrlKey || event.metaKey) && selectedNodeId && (event.key === '[' || event.key === ']')) {
+                event.preventDefault();
+                moveLayer(selectedNodeId, event.shiftKey ? (event.key === ']' ? 'front' : 'back') : (event.key === ']' ? 'forward' : 'backward'));
+            }
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [deleteSelection, undo, redo]);
+    }, [deleteSelection, undo, redo, selectedNodeId, moveLayer]);
 
     const uploadAsset = async (file, targetNodeId = null) => {
         if (!file) return;
@@ -767,7 +882,7 @@ function EditorCanvas({ diagram }) {
         try {
             const form = new FormData();
             form.append('asset', file);
-            const response = await fetch(route('diagram-assets.store'), { method: 'POST', headers: { Accept: 'application/json' }, body: form });
+            const response = await fetch(route('diagram-assets.store'), { method: 'POST', headers: withCsrf({ Accept: 'application/json' }), body: form });
             const result = await response.json();
             if (!response.ok) throw new Error(result.message || 'Upload failed.');
             if (targetNodeId) updateNode(targetNodeId, { imageUrl: result.url, mediaType: result.type, icon: 'none' });
@@ -797,7 +912,7 @@ function EditorCanvas({ diagram }) {
         setUploading(true);
         try {
             const form = new FormData(); form.append('asset', file);
-            const response = await fetch(route('diagram-assets.store'), { method: 'POST', headers: { Accept: 'application/json' }, body: form });
+            const response = await fetch(route('diagram-assets.store'), { method: 'POST', headers: withCsrf({ Accept: 'application/json' }), body: form });
             const result = await response.json();
             if (!response.ok) throw new Error(result.message || 'Import failed.');
             updatePageBackground({ backgroundImage: result.url, backgroundName: result.name || file.name, backgroundType: result.type, backgroundFit: 'cover' });
@@ -812,17 +927,16 @@ function EditorCanvas({ diagram }) {
         setSaving(true);
         try {
             const cleanFilename = filename.trim() || title.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'workflow';
-            const response = await fetch(diagram ? route('diagrams.update', diagram.id) : route('diagrams.store'), {
-                method: diagram ? 'PUT' : 'POST',
-                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-                body: JSON.stringify({ title: title.trim() || 'Untitled workflow', filename: cleanFilename, nodes, edges, pages }),
-            });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.message || 'Save failed.');
-            localStorage.setItem('flowcraft-diagram', JSON.stringify({ title, filename: cleanFilename, nodes, edges, pages }));
+            const input = { title: title.trim() || 'Untitled workflow', filename: cleanFilename, nodes, edges, pages };
+            const operation = diagram
+                ? `mutation UpdateDiagram($id: ID!, $input: DiagramInput!) { updateDiagram(id: $id, input: $input) { id } }`
+                : `mutation CreateDiagram($input: DiagramInput!) { createDiagram(input: $input) { id } }`;
+            const result = await graphqlRequest(operation, diagram ? { id: diagram.id, input } : { input });
+            const savedDiagram = diagram ? result.updateDiagram : result.createDiagram;
+            localStorage.setItem(draftStorageKey, JSON.stringify({ title, filename: cleanFilename, nodes, edges, pages }));
             setFilename(cleanFilename);
             setSaved(true);
-            if (!diagram && result.edit_url) window.location.assign(result.edit_url);
+            if (!diagram && savedDiagram?.id) window.location.assign(route('diagrams.edit', savedDiagram.id));
         } catch (error) {
             window.alert(error.message || 'The diagram could not be saved.');
         } finally {
@@ -885,7 +999,12 @@ function EditorCanvas({ diagram }) {
                     && node.data?.imageUrl && isSvgAsset(node.data.imageUrl, node.data.mediaType));
                 for (const storedNode of candidates) {
                     try {
-                        vectorItems.push({ node: renderedById.get(storedNode.id) || storedNode, source: await loadSvgSource(storedNode.data.imageUrl) });
+                        vectorItems.push({
+                            node: renderedById.get(storedNode.id) || storedNode,
+                            source: await loadSvgSource(storedNode.data.imageUrl),
+                            layerIndex: page.nodes.findIndex((node) => node.id === storedNode.id),
+                            overlay: null,
+                        });
                     } catch (error) {
                         console.warn(`SVG ${storedNode.id} will use the raster fallback.`, error);
                     }
@@ -980,6 +1099,27 @@ function EditorCanvas({ diagram }) {
                 }
                 const rasterFormat = targetFormat === 'pdf' ? 'png' : targetFormat;
                 const mime = rasterFormat === 'jpeg' ? 'image/jpeg' : `image/${rasterFormat}`;
+                if (targetFormat === 'pdf' && vectorItems.length) {
+                    for (let index = 0; index < vectorItems.length; index += 1) {
+                        const vectorItem = vectorItems[index];
+                        const nextVectorIndex = vectorItems[index + 1]?.layerIndex ?? page.nodes.length;
+                        const overlayNodeIds = new Set(page.nodes
+                            .slice(vectorItem.layerIndex + 1, nextVectorIndex)
+                            .filter((node) => !vectorNodeIds.has(node.id))
+                            .map((node) => node.id));
+                        if (!overlayNodeIds.size) continue;
+                        const overlayCanvas = await toCanvas(viewportElement, {
+                            ...captureOptions,
+                            filter: (element) => {
+                                if (element?.classList?.contains('react-flow__resize-control') || element?.classList?.contains('workflow-handle')) return false;
+                                if (element?.classList?.contains('react-flow__edges')) return false;
+                                if (element?.classList?.contains('react-flow__node')) return overlayNodeIds.has(element.getAttribute('data-id'));
+                                return true;
+                            },
+                        });
+                        vectorItem.overlay = await new Promise((resolve) => overlayCanvas.toBlob(resolve, 'image/png'));
+                    }
+                }
                 return await new Promise((resolve) => canvas.toBlob(resolve, mime, 0.94));
             } finally {
                 selectionVisuals.forEach((element, index) => element.classList.add(selectionClasses[index]));
@@ -1012,7 +1152,7 @@ function EditorCanvas({ diagram }) {
                     const pdfHeight = pdf.internal.pageSize.getHeight();
                     pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
                     const vectorLayout = pdfVectorLayouts.get(page.id);
-                    for (const { node, source } of vectorLayout?.items || []) {
+                    for (const { node, source, overlay } of vectorLayout?.items || []) {
                         const documentNode = new DOMParser().parseFromString(source, 'image/svg+xml');
                         const svgElement = documentNode.documentElement;
                         const fit = node.data?.imageFit || 'contain';
@@ -1033,6 +1173,14 @@ function EditorCanvas({ diagram }) {
                             loadExternalStyleSheets: false,
                             loadImages: true,
                         });
+                        if (overlay) {
+                            const overlayDataUrl = await new Promise((resolve) => {
+                                const reader = new FileReader();
+                                reader.onload = () => resolve(reader.result);
+                                reader.readAsDataURL(overlay);
+                            });
+                            pdf.addImage(overlayDataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+                        }
                     }
                 }
                 pdf.save(`${safeName}.pdf`);
@@ -1068,11 +1216,17 @@ function EditorCanvas({ diagram }) {
                     <div className="header-actions">
                         <ToolButton icon={Undo2} label="Undo" onClick={undo} disabled={!history.length} /><ToolButton icon={Redo2} label="Redo" onClick={redo} disabled={!future.length} />
                         <span className="toolbar-divider" /><button type="button" className="save-button" onClick={saveDiagram} disabled={saving}><Save size={16} /> {saving ? 'Saving...' : 'Save'}</button>
-                        <ExportMenu onExport={exportDiagram} exporting={exporting} filename={filename} onFilenameChange={(value) => { setFilename(value); setSaved(false); }} pages={pages} /><button type="button" className="avatar" title="Your profile">SW</button>
+                        <ExportMenu onExport={exportDiagram} exporting={exporting} filename={filename} onFilenameChange={(value) => { setFilename(value); setSaved(false); }} pages={pages} />
+                        <Link href={route('logout')} method="post" as="button" className="editor-logout" title="Log out"><LogOut size={16} /><span>Log out</span></Link>
                     </div>
                 </header>
                 <div className="editor-body">
-                    <Sidebar onAddNode={addNodeFromSidebar} onUpload={uploadAsset} uploading={uploading} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} />
+                    <Sidebar
+                        onAddNode={addNodeFromSidebar} onUpload={uploadAsset} uploading={uploading}
+                        collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} nodes={nodes}
+                        selectedNodeId={selectedNodeId} onSelectNode={(id) => { setSelectedNodeId(id); setSelectedEdgeId(null); }}
+                        onMoveLayer={moveLayer} onReorderLayer={reorderLayer}
+                    />
                     <main className="canvas-shell" ref={wrapperRef}>
                         <PageControls
                             page={activePage} elementCount={nodes.length} onResize={resizePage}
@@ -1093,7 +1247,7 @@ function EditorCanvas({ diagram }) {
                             onPaneClick={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }}
                             onDrop={onDrop} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
                             connectionMode={ConnectionMode.Loose} connectionLineStyle={{ stroke: '#6d5dfc', strokeWidth: 2.5, strokeDasharray: '8 7' }}
-                            minZoom={0.25} maxZoom={2.5} fitView fitViewOptions={{ padding: 0.24, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }}
+                            minZoom={0.25} maxZoom={2.5} fitView fitViewOptions={{ padding: 0.24, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }} elevateNodesOnSelect={false}
                         >
                             <Background color="#d8d8dd" gap={22} size={1.1} /><Controls position="bottom-left" showInteractive={false} />
                             <MiniMap position="bottom-right" pannable zoomable nodeColor={(node) => node.data.color.value} maskColor="rgba(247,247,248,.78)" />
@@ -1103,7 +1257,7 @@ function EditorCanvas({ diagram }) {
                                 <ToolButton icon={Grid2X2} label="Fit view" onClick={() => flow.fitView({ padding: 0.25, duration: 300 })} />
                             </Panel>
                         </ReactFlow></ArtboardFrame>
-                        <PropertiesPanel selectedNode={selectedNode} selectedEdge={selectedEdge} onUpdateNode={updateNode} onUpdateEdge={updateEdge} onUpload={uploadAsset} uploading={uploading} onDelete={deleteSelection} onClose={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }} />
+                        <PropertiesPanel selectedNode={selectedNode} selectedEdge={selectedEdge} onUpdateNode={updateNode} onUpdateEdge={updateEdge} onUpload={uploadAsset} uploading={uploading} onMoveLayer={moveLayer} onDelete={deleteSelection} onClose={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }} />
                         <PagesBar pages={pages} activePageId={activePageId} onSelect={selectPage} onAdd={addPage} onDuplicate={duplicatePage} onRename={renamePage} onDelete={deletePage} />
                     </main>
                 </div>
