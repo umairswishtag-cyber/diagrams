@@ -1,7 +1,5 @@
 @import "tailwindcss";
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap');
-
 :root {
     --ink: #20212a;
     --muted: #514f59;
@@ -21,7 +19,7 @@ body {
     margin: 0;
     color: var(--ink);
     background: var(--paper);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'DM Sans Variable', sans-serif;
     overflow: hidden;
 }
 
@@ -35,7 +33,7 @@ button { color: inherit; }
 .auth-showcase__glow { position: absolute; z-index: -1; border-radius: 50%; filter: blur(2px); pointer-events: none; }
 .auth-showcase__glow--one { width: 310px; height: 310px; right: -110px; top: 34%; background: rgba(91, 72, 228, .18); }
 .auth-showcase__glow--two { width: 220px; height: 220px; left: -90px; bottom: -65px; background: rgba(32, 190, 161, .12); }
-.auth-brand { display: inline-flex; align-items: center; gap: 10px; width: fit-content; color: #24212d; font: 800 20px 'Manrope', sans-serif; letter-spacing: -.5px; text-decoration: none; }
+.auth-brand { display: inline-flex; align-items: center; gap: 10px; width: fit-content; color: #24212d; font: 800 20px 'Manrope Variable', sans-serif; letter-spacing: -.5px; text-decoration: none; }
 .auth-brand--light { color: #fff; }
 .auth-brand__mark { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px; color: #fff; background: linear-gradient(145deg, #8274ff, #5d4ce3); box-shadow: 0 7px 20px rgba(91, 72, 226, .3); }
 .auth-showcase__content { width: min(100%, 610px); margin: auto; padding: 42px 0 24px; }
@@ -356,6 +354,7 @@ button { color: inherit; }
 .rich-editor:focus { border-color: #a99fff; box-shadow: 0 0 0 3px #f0eeff; }
 .rich-editor p, .rich-editor div { margin: 0; }.rich-editor ul, .rich-editor ol { margin: 4px 0; padding-left: 20px; }
 .type-style-row { margin-top: 9px; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.type-style-row .font-family-field { grid-column: 1 / -1; }
 .type-style-row label { min-width: 0; color: #85818d; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .type-style-row label span { display: block; margin-bottom: 4px; }
 .type-style-row select, .type-style-row input, .no-fill-button { width: 100%; height: 32px; border: 1px solid #dedce2; border-radius: 7px; background: #fff; }

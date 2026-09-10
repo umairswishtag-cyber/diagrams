@@ -4,6 +4,44 @@ import {
     applyNodeChanges, getNodesBounds, getSmoothStepPath, getViewportForBounds, useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import '@fontsource-variable/inter/wght.css';
+import '@fontsource-variable/inter/wght-italic.css';
+import '@fontsource-variable/lora/wght.css';
+import '@fontsource-variable/lora/wght-italic.css';
+import '@fontsource-variable/playfair-display/wght.css';
+import '@fontsource-variable/playfair-display/wght-italic.css';
+import '@fontsource-variable/source-code-pro/wght.css';
+import '@fontsource-variable/source-code-pro/wght-italic.css';
+import '@fontsource-variable/roboto/wght.css';
+import '@fontsource-variable/roboto/wght-italic.css';
+import '@fontsource/poppins/400.css';
+import '@fontsource/poppins/400-italic.css';
+import '@fontsource/poppins/700.css';
+import '@fontsource/poppins/700-italic.css';
+import '@fontsource-variable/open-sans/wght.css';
+import '@fontsource-variable/open-sans/wght-italic.css';
+import '@fontsource-variable/montserrat/wght.css';
+import '@fontsource-variable/montserrat/wght-italic.css';
+import '@fontsource-variable/nunito/wght.css';
+import '@fontsource-variable/nunito/wght-italic.css';
+import '@fontsource/great-vibes/400.css';
+import '@fontsource-variable/dancing-script/wght.css';
+import '@fontsource/oxygen/400.css';
+import '@fontsource/oxygen/700.css';
+import '@fontsource-variable/cinzel/wght.css';
+import '@fontsource/marcellus/400.css';
+import '@fontsource/tajawal/400.css';
+import '@fontsource/tajawal/700.css';
+import '@fontsource-variable/noto-sans-arabic/wght.css';
+import '@fontsource/ibm-plex-sans-arabic/400.css';
+import '@fontsource/ibm-plex-sans-arabic/700.css';
+import '@fontsource/noto-serif-tc/chinese-traditional-400.css';
+import '@fontsource/lateef/400.css';
+import '@fontsource/lateef/700.css';
+import '@fontsource/noto-naskh-arabic/400.css';
+import '@fontsource/noto-naskh-arabic/700.css';
+import '@fontsource-variable/arimo/wght.css';
+import '@fontsource-variable/arimo/wght-italic.css';
 import {
     AlignCenter, AlignLeft, AlignRight, AppWindow, ArrowDown, ArrowLeft, ArrowUp, Bold, Box,
     Braces, BringToFront, Check, ChevronDown, Circle as CircleIcon, Cloud, Code2, Copy,
@@ -12,7 +50,7 @@ import {
     MousePointer2, Network, PanelBottom, Play, Plus, Redo2, Save, SendToBack, Server,
     Settings, Shapes, Sparkles, Square, Trash2, Type, Underline, Undo2, Upload, Users, X, Zap,
 } from 'lucide-react';
-import { toCanvas, toSvg } from 'html-to-image';
+import { getFontEmbedCSS, toCanvas, toSvg } from 'html-to-image';
 import { GIFEncoder, applyPalette, quantize } from 'gifenc';
 import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
@@ -46,6 +84,37 @@ const COLORS = [
     { name: 'Blue', value: '#3182ce', soft: '#e8f3ff' },
     { name: 'Slate', value: '#536174', soft: '#eef1f5' },
 ];
+
+const FONT_FAMILIES = [
+    { label: 'DM Sans', value: 'DM Sans Variable', stack: "'DM Sans Variable', sans-serif" },
+    { label: 'Manrope', value: 'Manrope Variable', stack: "'Manrope Variable', sans-serif" },
+    { label: 'Inter', value: 'Inter Variable', stack: "'Inter Variable', sans-serif" },
+    { label: 'Roboto', value: 'Roboto Variable', stack: "'Roboto Variable', sans-serif" },
+    { label: 'Poppins', value: 'Poppins', stack: "'Poppins', sans-serif" },
+    { label: 'Arial', value: 'Arimo Variable', stack: "'Arimo Variable', Arial, sans-serif" },
+    { label: 'Open Sans', value: 'Open Sans Variable', stack: "'Open Sans Variable', sans-serif" },
+    { label: 'Montserrat', value: 'Montserrat Variable', stack: "'Montserrat Variable', sans-serif" },
+    { label: 'Nunito', value: 'Nunito Variable', stack: "'Nunito Variable', sans-serif" },
+    { label: 'Oxygen', value: 'Oxygen', stack: "'Oxygen', sans-serif" },
+    { label: 'Lora', value: 'Lora Variable', stack: "'Lora Variable', serif" },
+    { label: 'Playfair Display', value: 'Playfair Display Variable', stack: "'Playfair Display Variable', serif" },
+    { label: 'Source Code Pro', value: 'Source Code Pro Variable', stack: "'Source Code Pro Variable', monospace" },
+    { label: 'Great Vibes', value: 'Great Vibes', stack: "'Great Vibes', cursive" },
+    { label: 'Dancing Script', value: 'Dancing Script Variable', stack: "'Dancing Script Variable', cursive" },
+    { label: 'Cinzel', value: 'Cinzel Variable', stack: "'Cinzel Variable', serif" },
+    { label: 'Marcellus', value: 'Marcellus', stack: "'Marcellus', serif" },
+    { label: 'Tajawal', value: 'Tajawal', stack: "'Tajawal', sans-serif" },
+    { label: 'Noto Sans Arabic', value: 'Noto Sans Arabic Variable', stack: "'Noto Sans Arabic Variable', sans-serif" },
+    { label: 'IBM Plex Sans Arabic', value: 'IBM Plex Sans Arabic', stack: "'IBM Plex Sans Arabic', sans-serif" },
+    { label: 'Lateef', value: 'Lateef', stack: "'Lateef', serif" },
+    { label: 'Noto Naskh Arabic', value: 'Noto Naskh Arabic', stack: "'Noto Naskh Arabic', serif" },
+    { label: 'Noto Serif Traditional Chinese', value: 'Noto Serif TC', stack: "'Noto Serif TC', serif" },
+];
+
+function fontStack(fontFamily = 'DM Sans Variable') {
+    const legacyFamily = fontFamily === 'DM Sans' ? 'DM Sans Variable' : fontFamily === 'Manrope' ? 'Manrope Variable' : fontFamily;
+    return FONT_FAMILIES.find((font) => font.value === legacyFamily)?.stack || FONT_FAMILIES[0].stack;
+}
 
 const DEFAULT_PAGE_SIZE = { width: 1200, height: 760 };
 const PAGE_SIZES = {
@@ -252,7 +321,7 @@ function WorkflowNode({ id, data, selected, width, height }) {
     return (
         <div
             className={`workflow-node workflow-node--${data.shape} ${data.hideBorder ? 'has-hidden-border' : ''} ${showShadow ? 'has-shadow' : ''} ${selected ? 'is-selected' : ''}`}
-            style={{ '--node-color': data.color.value, '--node-soft': data.color.soft, backgroundColor, width: width || undefined, height: height || undefined }}
+            style={{ '--node-color': data.color.value, '--node-soft': data.color.soft, backgroundColor, width: width || undefined, height: height || undefined, fontFamily: fontStack(data.fontFamily) }}
             onDoubleClick={(event) => { if (!isPageImage) { event.stopPropagation(); setEditing(true); } }}
         >
             <NodeResizer
@@ -271,9 +340,9 @@ function WorkflowNode({ id, data, selected, width, height }) {
                     {data.imageUrl ? <span className="workflow-node__icon workflow-node__icon--custom"><img src={data.imageUrl} alt="" /></span> : Icon && <span className="workflow-node__icon"><Icon size={20} strokeWidth={1.9} /></span>}
                     {editing ? (
                         <div
-                            className="workflow-node__rich-input nodrag nowheel" contentEditable suppressContentEditableWarning autoFocus
+                            className="workflow-node__rich-input nodrag nowheel" contentEditable suppressContentEditableWarning autoFocus dir="auto"
                             dangerouslySetInnerHTML={{ __html: draft }}
-                            style={{ color: data.textColor || undefined, fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
+                            style={{ color: data.textColor || undefined, fontSize: data.fontSize ? `${data.fontSize}px` : undefined, fontFamily: fontStack(data.fontFamily) }}
                             onInput={(event) => { draftRef.current = event.currentTarget.innerHTML; }} onBlur={finishEditing}
                             onKeyDown={(event) => {
                                 if (event.key === 'Escape') { const value = data.richText || data.label; draftRef.current = value; setDraft(value); setEditing(false); }
@@ -281,7 +350,7 @@ function WorkflowNode({ id, data, selected, width, height }) {
                                 event.stopPropagation();
                             }}
                         />
-                    ) : <div className="workflow-node__label rich-content" style={{ color: data.textColor || undefined, fontSize: data.fontSize ? `${data.fontSize}px` : undefined }} dangerouslySetInnerHTML={{ __html: cleanRichText(data.richText || data.label) }} />}
+                    ) : <div className="workflow-node__label rich-content" dir="auto" style={{ color: data.textColor || undefined, fontSize: data.fontSize ? `${data.fontSize}px` : undefined, fontFamily: fontStack(data.fontFamily) }} dangerouslySetInnerHTML={{ __html: cleanRichText(data.richText || data.label) }} />}
                 </>}
             </div>
         </div>
@@ -415,7 +484,8 @@ function RichTextControl({ node, onChange }) {
             <button type="button" onClick={() => command('insertOrderedList')} title="Numbered list"><ListOrdered size={14} /></button>
         </div>
         <div
-            ref={editorRef} className="rich-editor" contentEditable suppressContentEditableWarning
+            ref={editorRef} className="rich-editor" contentEditable suppressContentEditableWarning dir="auto"
+            style={{ fontFamily: fontStack(node.data.fontFamily) }}
             dangerouslySetInnerHTML={{ __html: draft }} onInput={(event) => { draftRef.current = event.currentTarget.innerHTML; }}
             onKeyDown={(event) => {
                 insertEditorLineBreak(event, event.currentTarget, (value) => { draftRef.current = value; });
@@ -470,6 +540,9 @@ function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdg
                 <span className="field-label">Rich text</span>
                 <RichTextControl key={selectedNode.id} node={selectedNode} onChange={(patch) => onUpdateNode(selectedNode.id, patch)} />
                 <div className="type-style-row">
+                    <label className="font-family-field"><span>Font</span><select value={selectedNode.data.fontFamily || 'DM Sans Variable'} onChange={(event) => onUpdateNode(selectedNode.id, { fontFamily: event.target.value })}>
+                        {FONT_FAMILIES.map((font) => <option key={font.value} value={font.value} style={{ fontFamily: font.stack }}>{font.label}</option>)}
+                    </select></label>
                     <label><span>Size</span><select value={selectedNode.data.fontSize || (selectedNode.data.shape === 'text' ? 17 : 13)} onChange={(event) => onUpdateNode(selectedNode.id, { fontSize: Number(event.target.value) })}>
                         {[10, 12, 13, 14, 16, 17, 20, 24, 30, 36, 48].map((size) => <option key={size} value={size}>{size} px</option>)}
                     </select></label>
@@ -730,6 +803,7 @@ function EditorCanvas({ diagram }) {
                 kind: overrides.kind || null, imageFit: overrides.imageFit || null, mediaType: overrides.mediaType || null,
                 hideBorder: Boolean(overrides.hideBorder), backgroundColor: overrides.backgroundColor || null,
                 showShadow: overrides.showShadow ?? null,
+                fontFamily: overrides.fontFamily || 'DM Sans Variable',
                 color: COLORS[items.length % COLORS.length],
             },
         }]);
@@ -992,6 +1066,17 @@ function EditorCanvas({ diagram }) {
             const boundsNodes = renderedNodes.length === page.nodes.length ? renderedNodes : page.nodes;
             const bounds = boundsNodes.length ? getNodesBounds(boundsNodes) : { x: 0, y: 0, width: width * 0.6, height: height * 0.6 };
             const viewport = getViewportForBounds(bounds, width, height, 0.02, 2, 0.12);
+            if (document.fonts?.ready) await document.fonts.ready;
+            let fontEmbedCSS = '';
+            try {
+                const [staticFonts, variableFonts] = await Promise.all([
+                    getFontEmbedCSS(viewportElement, { preferredFontFormat: 'woff2' }),
+                    getFontEmbedCSS(viewportElement, { preferredFontFormat: 'woff2-variations' }),
+                ]);
+                fontEmbedCSS = `${staticFonts}\n${variableFonts}`;
+            } catch (error) {
+                console.warn('Export font embedding could not be completed; loaded fonts will still be rendered.', error);
+            }
             const vectorItems = [];
             if (targetFormat === 'pdf') {
                 const renderedById = new Map(renderedNodes.map((node) => [node.id, node]));
@@ -1014,6 +1099,7 @@ function EditorCanvas({ diagram }) {
             const vectorNodeIds = new Set(vectorItems.map(({ node }) => node.id));
             const captureOptions = {
                 width, height, pixelRatio: 1,
+                fontEmbedCSS,
                 style: { width: `${width}px`, height: `${height}px`, transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` },
                 filter: (element) => {
                     if (element?.classList?.contains('react-flow__resize-control') || element?.classList?.contains('workflow-handle')) return false;

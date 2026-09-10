@@ -1,5 +1,8 @@
 import './bootstrap';
 import '../css/app.css';
+import '@fontsource-variable/dm-sans/wght.css';
+import '@fontsource-variable/dm-sans/wght-italic.css';
+import '@fontsource-variable/manrope/wght.css';
 import "@shopify/polaris/build/esm/styles.css";
 import { createInertiaApp } from '@inertiajs/react';
 import { AppProvider } from '@shopify/polaris';
