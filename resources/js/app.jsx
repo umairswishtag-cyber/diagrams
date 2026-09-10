@@ -9,8 +9,13 @@ import enTranslations from '@shopify/polaris/locales/en.json';
 
 
 const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
+const inertiaElement = document.getElementById('app');
+const initialPage = inertiaElement?.dataset.page
+    ? JSON.parse(inertiaElement.dataset.page)
+    : undefined;
 
 createInertiaApp({
+    page: initialPage,
     title: (title) => `${title} - ${appName}`,
     resolve: (name) =>
         resolvePageComponent(

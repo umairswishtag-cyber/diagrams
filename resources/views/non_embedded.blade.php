@@ -7,7 +7,8 @@
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <link rel="shortcut icon" href="/favicon.png" type="image/png">
     <link rel="icon" href="/favicon.png" type="image/png">
-    <title>Laravel 11</title>
+    <meta name="theme-color" content="#6d5dfc">
+    <title>Flowcraft — Workflow diagram editor</title>
     @routes
     @viteReactRefresh
     @vite(['resources/js/app.jsx'])
