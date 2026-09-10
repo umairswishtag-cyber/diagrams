@@ -238,7 +238,10 @@ function WorkflowNode({ id, data, selected, width, height }) {
                 onResizeStart={beginResize} onResizeEnd={endResize}
             />
             {[Position.Top, Position.Right, Position.Bottom, Position.Left].map((position) => (
-                <Handle key={position} type="source" id={position} position={position} className="workflow-handle" />
+                <Handle
+                    key={position} type="source" id={position} position={position} className="workflow-handle"
+                    aria-label={`Draw connector from ${position}`} title="Drag to draw an arrow"
+                />
             ))}
             <div className="workflow-node__inner">
                 {isPageImage ? <img className="workflow-node__page-image" src={data.imageUrl} alt={data.label || ''} style={{ objectFit: data.imageFit || 'contain' }} /> : <>
