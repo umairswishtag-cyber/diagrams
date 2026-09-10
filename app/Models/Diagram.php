@@ -9,13 +9,14 @@ class Diagram extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['title', 'filename', 'nodes', 'edges'];
+    protected $fillable = ['title', 'filename', 'nodes', 'edges', 'pages'];
 
     protected function casts(): array
     {
         return [
             'nodes' => 'array',
             'edges' => 'array',
+            'pages' => 'array',
         ];
     }
 }

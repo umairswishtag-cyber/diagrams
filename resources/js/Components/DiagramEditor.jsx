@@ -1,20 +1,23 @@
 import {
-    Background, BaseEdge, ConnectionMode, Controls, Handle, MarkerType, MiniMap,
+    Background, BaseEdge, ConnectionMode, Controls, Handle, MarkerType, MiniMap, NodeResizer,
     Panel, Position, ReactFlow, ReactFlowProvider, addEdge, applyEdgeChanges,
     applyNodeChanges, getNodesBounds, getSmoothStepPath, getViewportForBounds, useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
-    AppWindow, ArrowLeft, Box, Braces, Check, ChevronDown, Circle as CircleIcon, Cloud,
-    Code2, Database, Diamond, Download, FileText, GitBranch, Grid2X2, Image as ImageIcon,
-    Menu, MessageSquareText, MousePointer2, Network, Play, Plus, Redo2, Save,
-    Server, Settings, Sparkles, Square, Trash2, Type, Undo2, Upload, Users, X, Zap,
+    AlignCenter, AlignLeft, AlignRight, AppWindow, ArrowLeft, Bold, Box, Braces, Check,
+    ChevronDown, Circle as CircleIcon, Cloud, Code2, Copy, Database, Diamond, Download,
+    FileText, GitBranch, Grid2X2, Image as ImageIcon, Italic, List, ListOrdered, Menu,
+    MessageSquareText, MousePointer2, Network, PanelBottom, Play, Plus, Redo2, Save,
+    Server, Settings, Sparkles, Square, Trash2, Type, Underline, Undo2, Upload, Users, X, Zap,
 } from 'lucide-react';
 import { toCanvas, toSvg } from 'html-to-image';
 import { GIFEncoder, applyPalette, quantize } from 'gifenc';
+import JSZip from 'jszip';
+import { jsPDF } from 'jspdf';
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-const ACTIONS = createContext({ updateNode: () => {} });
+const ACTIONS = createContext({ updateNode: () => {}, beginResize: () => {}, endResize: () => {} });
 
 const ICONS = {
     none: null, window: AppWindow, code: Code2, database: Database, cloud: Cloud,
@@ -22,6 +25,7 @@ const ICONS = {
 };
 
 const SHAPES = [
+    { type: 'text', label: 'Rich text', icon: Type },
     { type: 'rectangle', label: 'Process', icon: Square },
     { type: 'rounded', label: 'Rounded', icon: Box },
     { type: 'circle', label: 'Circle', icon: CircleIcon },
@@ -38,6 +42,72 @@ const COLORS = [
     { name: 'Blue', value: '#3182ce', soft: '#e8f3ff' },
     { name: 'Slate', value: '#536174', soft: '#eef1f5' },
 ];
+
+const DEFAULT_PAGE_SIZE = { width: 1200, height: 760 };
+const PAGE_SIZES = {
+    'Diagram': { width: 1200, height: 760 },
+    'Presentation': { width: 1200, height: 675 },
+    'A4 landscape': { width: 1123, height: 794 },
+    'A4 portrait': { width: 794, height: 1123 },
+    'Web': { width: 1440, height: 900 },
+};
+
+function plainText(html = '') {
+    if (typeof document === 'undefined') return html.replace(/<[^>]*>/g, '');
+    const element = document.createElement('div');
+    element.innerHTML = html;
+    return element.textContent || '';
+}
+
+function cleanRichText(html = '') {
+    if (typeof document === 'undefined') return html;
+    const root = document.createElement('div');
+    root.innerHTML = html;
+    const allowed = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'BR', 'P', 'DIV', 'UL', 'OL', 'LI', 'SPAN', 'FONT']);
+    [...root.querySelectorAll('*')].forEach((element) => {
+        if (!allowed.has(element.tagName)) {
+            element.replaceWith(...element.childNodes);
+            return;
+        }
+        [...element.attributes].forEach((attribute) => {
+            const name = attribute.name.toLowerCase();
+            if (name === 'style') {
+                const alignment = element.style.textAlign;
+                element.removeAttribute('style');
+                if (['left', 'center', 'right', 'justify'].includes(alignment)) element.style.textAlign = alignment;
+                return;
+            }
+            if (name === 'align' && ['left', 'center', 'right', 'justify'].includes(attribute.value.toLowerCase())) return;
+            if (name !== 'color') element.removeAttribute(attribute.name);
+        });
+    });
+    return root.innerHTML;
+}
+
+function createPage(number, content = {}) {
+    return {
+        id: `page-${Date.now()}-${number}-${Math.round(Math.random() * 999)}`,
+        name: `Page ${number}`,
+        ...DEFAULT_PAGE_SIZE,
+        nodes: [],
+        edges: [],
+        ...content,
+    };
+}
+
+function loadPages(diagram) {
+    const storedPages = Array.isArray(diagram?.pages) && diagram.pages.length ? diagram.pages : null;
+    const source = storedPages || [createPage(1, { nodes: diagram?.nodes || seedNodes, edges: diagram?.edges || seedEdges })];
+    return source.map((page, index) => ({
+        ...createPage(index + 1),
+        ...page,
+        name: page.name || `Page ${index + 1}`,
+        width: Number(page.width) || DEFAULT_PAGE_SIZE.width,
+        height: Number(page.height) || DEFAULT_PAGE_SIZE.height,
+        nodes: Array.isArray(page.nodes) ? page.nodes : [],
+        edges: Array.isArray(page.edges) ? page.edges : [],
+    }));
+}
 
 function makeEdge(id, source, target, color = '#6d5dfc', lineStyle = 'dashed') {
     return {
@@ -111,39 +181,50 @@ async function createAnimatedWebp(frames, width, height, delay) {
     return new Blob([riff, body], { type: 'image/webp' });
 }
 
-function WorkflowNode({ id, data, selected }) {
-    const { updateNode } = useContext(ACTIONS);
+function WorkflowNode({ id, data, selected, width, height }) {
+    const { updateNode, beginResize, endResize } = useContext(ACTIONS);
+    const isPageImage = data.kind === 'image' || data.shape === 'image';
     const [editing, setEditing] = useState(false);
-    const [draft, setDraft] = useState(data.label);
+    const [draft, setDraft] = useState(data.richText || data.label);
+    const draftRef = useRef(data.richText || data.label);
     const Icon = ICONS[data.icon] || null;
 
-    useEffect(() => setDraft(data.label), [data.label]);
+    useEffect(() => { const value = data.richText || data.label; setDraft(value); draftRef.current = value; }, [data.label, data.richText]);
     const finishEditing = () => {
-        updateNode(id, { label: draft.trim() || 'Untitled' });
+        const cleaned = cleanRichText(draftRef.current).trim() || 'Untitled';
+        updateNode(id, { richText: cleaned, label: plainText(cleaned).trim() || 'Untitled' });
         setEditing(false);
     };
 
     return (
         <div
-            className={`workflow-node workflow-node--${data.shape} ${selected ? 'is-selected' : ''}`}
-            style={{ '--node-color': data.color.value, '--node-soft': data.color.soft }}
-            onDoubleClick={(event) => { event.stopPropagation(); setEditing(true); }}
+            className={`workflow-node workflow-node--${data.shape} ${data.hideBorder ? 'has-hidden-border' : ''} ${selected ? 'is-selected' : ''}`}
+            style={{ '--node-color': data.color.value, '--node-soft': data.color.soft, width: width || undefined, height: height || undefined }}
+            onDoubleClick={(event) => { if (!isPageImage) { event.stopPropagation(); setEditing(true); } }}
         >
+            <NodeResizer
+                isVisible={selected} minWidth={isPageImage ? 40 : data.shape === 'text' ? 120 : 80} minHeight={isPageImage ? 40 : data.shape === 'text' ? 36 : 48}
+                keepAspectRatio={['circle', 'diamond'].includes(data.shape)} color={data.color.value}
+                onResizeStart={beginResize} onResizeEnd={endResize}
+            />
             {[Position.Top, Position.Right, Position.Bottom, Position.Left].map((position) => (
                 <Handle key={position} type="source" id={position} position={position} className="workflow-handle" />
             ))}
             <div className="workflow-node__inner">
-                {data.imageUrl ? <span className="workflow-node__icon workflow-node__icon--custom"><img src={data.imageUrl} alt="" /></span> : Icon && <span className="workflow-node__icon"><Icon size={20} strokeWidth={1.9} /></span>}
-                {editing ? (
-                    <input
-                        className="workflow-node__input nodrag" value={draft} autoFocus
-                        onChange={(event) => setDraft(event.target.value)} onBlur={finishEditing}
-                        onKeyDown={(event) => {
-                            if (event.key === 'Enter') finishEditing();
-                            if (event.key === 'Escape') { setDraft(data.label); setEditing(false); }
-                        }}
-                    />
-                ) : <span className="workflow-node__label">{data.label}</span>}
+                {isPageImage ? <img className="workflow-node__page-image" src={data.imageUrl} alt={data.label || ''} style={{ objectFit: data.imageFit || 'contain' }} /> : <>
+                    {data.imageUrl ? <span className="workflow-node__icon workflow-node__icon--custom"><img src={data.imageUrl} alt="" /></span> : Icon && <span className="workflow-node__icon"><Icon size={20} strokeWidth={1.9} /></span>}
+                    {editing ? (
+                        <div
+                            className="workflow-node__rich-input nodrag nowheel" contentEditable suppressContentEditableWarning autoFocus
+                            dangerouslySetInnerHTML={{ __html: draft }}
+                            onInput={(event) => { draftRef.current = event.currentTarget.innerHTML; }} onBlur={finishEditing}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Escape') { const value = data.richText || data.label; draftRef.current = value; setDraft(value); setEditing(false); }
+                                event.stopPropagation();
+                            }}
+                        />
+                    ) : <div className="workflow-node__label rich-content" style={{ color: data.textColor || undefined, fontSize: data.fontSize ? `${data.fontSize}px` : undefined }} dangerouslySetInnerHTML={{ __html: cleanRichText(data.richText || data.label) }} />}
+                </>}
             </div>
         </div>
     );
@@ -197,26 +278,90 @@ function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed }) {
                     <span className="quick-node__icon coral"><Database size={17} /></span><span><strong>Data store</strong><small>Database or cache</small></span><Plus size={15} />
                 </button>
                 <label className={`upload-media-button ${uploading ? 'is-loading' : ''}`}>
-                    <Upload size={16} /><span><strong>{uploading ? 'Uploading...' : 'Upload media'}</strong><small>SVG, PNG, JPG, WebP or GIF</small></span>
+                    <Upload size={16} /><span><strong>{uploading ? 'Uploading...' : 'Add image to page'}</strong><small>Draggable SVG, PNG, JPG, WebP or GIF</small></span>
                     <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,.gif,image/*" disabled={uploading} onChange={(event) => { onUpload(event.target.files?.[0]); event.target.value = ''; }} />
                 </label>
-                <div className="sidebar-tip"><Sparkles size={16} /><p><strong>Pro tip</strong><br />Double-click any shape to edit its text.</p></div>
+                <div className="sidebar-tip"><Sparkles size={16} /><p><strong>Pro tip</strong><br />Double-click text to edit it. Use the style panel for lists, emphasis and alignment.</p></div>
             </>}
         </aside>
     );
 }
 
+function RichTextControl({ node, onChange }) {
+    const editorRef = useRef(null);
+    const [draft, setDraft] = useState(node.data.richText || node.data.label || '');
+    const draftRef = useRef(draft);
+
+    useEffect(() => { const value = node.data.richText || node.data.label || ''; setDraft(value); draftRef.current = value; }, [node.id, node.data.richText, node.data.label]);
+
+    const commit = () => {
+        const cleaned = cleanRichText(editorRef.current?.innerHTML || draft).trim() || 'Untitled';
+        draftRef.current = cleaned;
+        setDraft(cleaned);
+        onChange({ richText: cleaned, label: plainText(cleaned).trim() || 'Untitled' });
+    };
+    const command = (name, value = null) => {
+        editorRef.current?.focus();
+        document.execCommand(name, false, value);
+        draftRef.current = editorRef.current?.innerHTML || draftRef.current;
+        commit();
+    };
+
+    return <>
+        <div className="rich-toolbar" onMouseDown={(event) => event.preventDefault()}>
+            <button type="button" onClick={() => command('bold')} title="Bold"><Bold size={14} /></button>
+            <button type="button" onClick={() => command('italic')} title="Italic"><Italic size={14} /></button>
+            <button type="button" onClick={() => command('underline')} title="Underline"><Underline size={14} /></button>
+            <i />
+            <button type="button" onClick={() => command('justifyLeft')} title="Align left"><AlignLeft size={14} /></button>
+            <button type="button" onClick={() => command('justifyCenter')} title="Align center"><AlignCenter size={14} /></button>
+            <button type="button" onClick={() => command('justifyRight')} title="Align right"><AlignRight size={14} /></button>
+            <button type="button" onClick={() => command('insertUnorderedList')} title="Bullet list"><List size={14} /></button>
+            <button type="button" onClick={() => command('insertOrderedList')} title="Numbered list"><ListOrdered size={14} /></button>
+        </div>
+        <div
+            ref={editorRef} className="rich-editor" contentEditable suppressContentEditableWarning
+            dangerouslySetInnerHTML={{ __html: draft }} onInput={(event) => { draftRef.current = event.currentTarget.innerHTML; }}
+            onBlur={commit}
+        />
+    </>;
+}
+
 function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdge, onUpload, uploading, onDelete, onClose }) {
     if (!selectedNode && !selectedEdge) return null;
+    const isImage = selectedNode && (selectedNode.data.kind === 'image' || selectedNode.data.shape === 'image');
     return (
         <aside className="properties-panel">
             <div className="properties-title">
-                <div><span>STYLE</span><strong>{selectedNode ? 'Shape settings' : 'Connector settings'}</strong></div>
+                <div><span>STYLE</span><strong>{isImage ? 'Image settings' : selectedNode ? 'Shape settings' : 'Connector settings'}</strong></div>
                 <button onClick={onClose} aria-label="Close properties"><X size={17} /></button>
             </div>
-            {selectedNode ? <>
-                <label className="field-label" htmlFor="node-label">Label</label>
-                <input id="node-label" className="property-input" value={selectedNode.data.label} onChange={(event) => onUpdateNode(selectedNode.id, { label: event.target.value })} />
+            {selectedNode ? <>{isImage ? <>
+                <div className="image-property-preview"><img src={selectedNode.data.imageUrl} alt={selectedNode.data.label || ''} /></div>
+                <label className="field-label" htmlFor="image-name">Image name</label>
+                <input id="image-name" className="property-input" value={selectedNode.data.label || ''} onChange={(event) => onUpdateNode(selectedNode.id, { label: event.target.value })} />
+                <label className="field-label" htmlFor="image-fit">Image fit</label>
+                <div className="select-wrap"><select id="image-fit" value={selectedNode.data.imageFit || 'contain'} onChange={(event) => onUpdateNode(selectedNode.id, { imageFit: event.target.value })}><option value="contain">Contain</option><option value="cover">Cover</option><option value="fill">Stretch</option></select><ChevronDown size={15} /></div>
+                <label className="property-upload"><Upload size={15} /> {uploading ? 'Uploading...' : 'Replace image'}
+                    <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,.gif,image/*" disabled={uploading} onChange={(event) => { onUpload(event.target.files?.[0], selectedNode.id); event.target.value = ''; }} />
+                </label>
+                <div className="animation-toggle border-toggle">
+                    <div><strong>Show border</strong><span>Display the image outline</span></div>
+                    <button type="button" role="switch" aria-checked={!selectedNode.data.hideBorder} className={!selectedNode.data.hideBorder ? 'is-on' : ''} onClick={() => onUpdateNode(selectedNode.id, { hideBorder: !selectedNode.data.hideBorder })}><i /></button>
+                </div>
+            </> : <>
+                <span className="field-label">Rich text</span>
+                <RichTextControl key={selectedNode.id} node={selectedNode} onChange={(patch) => onUpdateNode(selectedNode.id, patch)} />
+                <div className="type-style-row">
+                    <label><span>Size</span><select value={selectedNode.data.fontSize || (selectedNode.data.shape === 'text' ? 17 : 13)} onChange={(event) => onUpdateNode(selectedNode.id, { fontSize: Number(event.target.value) })}>
+                        {[10, 12, 13, 14, 16, 17, 20, 24, 30, 36, 48].map((size) => <option key={size} value={size}>{size} px</option>)}
+                    </select></label>
+                    <label><span>Text color</span><input type="color" value={selectedNode.data.textColor || '#20212a'} onChange={(event) => onUpdateNode(selectedNode.id, { textColor: event.target.value })} /></label>
+                </div>
+                <div className="animation-toggle border-toggle">
+                    <div><strong>Show border</strong><span>Display the element outline</span></div>
+                    <button type="button" role="switch" aria-checked={!selectedNode.data.hideBorder} className={!selectedNode.data.hideBorder ? 'is-on' : ''} onClick={() => onUpdateNode(selectedNode.id, { hideBorder: !selectedNode.data.hideBorder })}><i /></button>
+                </div>
                 <label className="field-label" htmlFor="node-icon">Icon</label>
                 <div className="select-wrap">
                     <select id="node-icon" value={selectedNode.data.icon || 'none'} onChange={(event) => onUpdateNode(selectedNode.id, { icon: event.target.value })}>
@@ -239,7 +384,7 @@ function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdg
                 <div className="mini-shape-grid">
                     {SHAPES.map(({ type, icon: Icon }) => <button key={type} className={selectedNode.data.shape === type ? 'is-selected' : ''} onClick={() => onUpdateNode(selectedNode.id, { shape: type })} title={type}><Icon size={17} /></button>)}
                 </div>
-            </> : <>
+            </>}</> : <>
                 <span className="field-label">Line style</span>
                 <div className="line-style-grid">
                     {['solid', 'dashed', 'dotted'].map((style) => (
@@ -262,9 +407,33 @@ function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdg
     );
 }
 
-function ExportMenu({ onExport, exporting, filename, onFilenameChange }) {
+function PagesBar({ pages, activePageId, onSelect, onAdd, onDuplicate, onRename, onDelete }) {
+    return (
+        <div className="pages-bar">
+            <div className="pages-bar__label"><PanelBottom size={15} /><span>Pages</span><b>{pages.length}</b></div>
+            <div className="page-tabs">
+                {pages.map((page, index) => (
+                    <button key={page.id} type="button" className={`page-tab ${page.id === activePageId ? 'is-active' : ''}`} onClick={() => onSelect(page.id)} onDoubleClick={() => {
+                        const name = window.prompt('Page name', page.name);
+                        if (name?.trim()) onRename(page.id, name.trim());
+                    }}>
+                        <span>{index + 1}</span><strong>{page.name}</strong><small>{page.width} × {page.height}</small>
+                    </button>
+                ))}
+            </div>
+            <button type="button" className="page-action" onClick={onAdd} title="Add page"><Plus size={16} /><span>Add page</span></button>
+            <button type="button" className="page-action page-action--icon" onClick={onDuplicate} title="Duplicate current page"><Copy size={16} /></button>
+            <button type="button" className="page-action page-action--icon is-danger" onClick={onDelete} disabled={pages.length === 1} title="Delete current page"><Trash2 size={16} /></button>
+        </div>
+    );
+}
+
+function ExportMenu({ onExport, exporting, filename, onFilenameChange, pages }) {
     const [open, setOpen] = useState(false);
+    const [selectedPageIds, setSelectedPageIds] = useState(() => pages.map((page) => page.id));
     const menuRef = useRef(null);
+    const pageKey = pages.map((page) => page.id).join('|');
+    useEffect(() => setSelectedPageIds(pages.map((page) => page.id)), [pageKey]);
     useEffect(() => {
         const close = (event) => { if (!menuRef.current?.contains(event.target)) setOpen(false); };
         document.addEventListener('mousedown', close);
@@ -276,20 +445,94 @@ function ExportMenu({ onExport, exporting, filename, onFilenameChange }) {
                 <Download size={16} /> {exporting ? 'Exporting...' : 'Export'} <ChevronDown size={14} />
             </button>
             {open && <div className="export-menu">
-                <div><strong>Export diagram</strong><span>Choose a name and format</span></div>
+                <div><strong>Export document</strong><span>Select exactly which pages to include</span></div>
+                <div className="export-page-picker">
+                    <div><strong>Pages ({selectedPageIds.length} selected)</strong><button type="button" onClick={() => setSelectedPageIds(selectedPageIds.length === pages.length ? [] : pages.map((page) => page.id))}>{selectedPageIds.length === pages.length ? 'Clear' : 'Select all'}</button></div>
+                    <div className="export-page-list">
+                        {pages.map((page, index) => <label key={page.id}>
+                            <input type="checkbox" checked={selectedPageIds.includes(page.id)} onChange={() => setSelectedPageIds((ids) => ids.includes(page.id) ? ids.filter((id) => id !== page.id) : [...ids, page.id])} />
+                            <span>{index + 1}</span><strong>{page.name}</strong>
+                        </label>)}
+                    </div>
+                </div>
                 <label className="export-filename"><span>File name</span><input value={filename} onChange={(event) => onFilenameChange(event.target.value)} placeholder="my-workflow" /></label>
-                {[['png', 'PNG', 'Best quality'], ['jpeg', 'JPEG', 'Smaller file'], ['webp', 'WEBP', 'Animated WebP'], ['gif', 'GIF', 'Animated GIF'], ['svg', 'SVG', 'Scalable vector']].map(([value, label, hint]) => (
-                    <button key={value} onClick={() => { setOpen(false); onExport(value); }}><ImageIcon size={17} /><span><strong>{label}</strong><small>{hint}</small></span></button>
+                {[['pdf', 'PDF', `${selectedPageIds.length} page${selectedPageIds.length === 1 ? '' : 's'} in one PDF`], ['png', 'PNG', 'High quality image'], ['jpeg', 'JPEG', 'Smaller image'], ['webp', 'WEBP', 'Modern image'], ['gif', 'GIF', 'Animated connectors'], ['svg', 'SVG', 'Scalable vector']].map(([value, label, hint]) => (
+                    <button key={value} disabled={!selectedPageIds.length} onClick={() => { setOpen(false); onExport(value, selectedPageIds); }}>{value === 'pdf' ? <FileText size={17} /> : <ImageIcon size={17} />}<span><strong>{label}</strong><small>{hint}</small></span></button>
                 ))}
             </div>}
         </div>
     );
 }
 
+function PageControls({ page, elementCount, onResize, onAddImage, onImportBackground, importing, onBackgroundFit, onRemoveBackground }) {
+    const preset = Object.entries(PAGE_SIZES).find(([, size]) => size.width === page.width && size.height === page.height)?.[0] || 'Custom';
+    const [custom, setCustom] = useState({ width: page.width, height: page.height });
+    const [selectedPreset, setSelectedPreset] = useState(preset);
+    useEffect(() => { setCustom({ width: page.width, height: page.height }); setSelectedPreset(preset); }, [page.id, page.width, page.height, preset]);
+    const applyCustom = () => onResize({
+        width: Math.max(320, Math.min(4000, Number(custom.width) || page.width)),
+        height: Math.max(240, Math.min(4000, Number(custom.height) || page.height)),
+    });
+    return (
+        <div className="artboard-controls">
+            <div className="artboard-summary"><strong>{page.name}</strong><span>{elementCount} elements</span></div>
+            <div className="page-settings">
+                <label className="page-import-button page-add-image"><ImageIcon size={14} />{importing ? 'Uploading…' : 'Add image'}
+                    <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,.gif,image/*" disabled={importing} onChange={(event) => { onAddImage(event.target.files?.[0]); event.target.value = ''; }} />
+                </label>
+                <label className="page-import-button"><Upload size={14} />{importing ? 'Importing…' : 'Page background'}
+                    <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,image/svg+xml,image/png,image/jpeg,image/webp" disabled={importing} onChange={(event) => { onImportBackground(event.target.files?.[0]); event.target.value = ''; }} />
+                </label>
+                {page.backgroundImage && <>
+                    <label>Image fit<select value={page.backgroundFit || 'cover'} onChange={(event) => onBackgroundFit(event.target.value)}><option value="cover">Cover</option><option value="contain">Contain</option><option value="fill">Stretch</option></select></label>
+                    <button type="button" className="remove-page-image" onClick={onRemoveBackground} title="Remove page image"><X size={14} /></button>
+                </>}
+                <label>Page size<select value={selectedPreset} onChange={(event) => {
+                    setSelectedPreset(event.target.value);
+                    const size = PAGE_SIZES[event.target.value];
+                    if (size) onResize(size);
+                }}>{Object.keys(PAGE_SIZES).map((name) => <option key={name}>{name}</option>)}<option>Custom</option></select></label>
+                {selectedPreset === 'Custom' && <div className="custom-page-size">
+                    <label><span>W</span><input type="number" min="320" max="4000" value={custom.width} onChange={(event) => setCustom((value) => ({ ...value, width: event.target.value }))} onBlur={applyCustom} onKeyDown={(event) => event.key === 'Enter' && applyCustom()} /></label>
+                    <b>×</b>
+                    <label><span>H</span><input type="number" min="240" max="4000" value={custom.height} onChange={(event) => setCustom((value) => ({ ...value, height: event.target.value }))} onBlur={applyCustom} onKeyDown={(event) => event.key === 'Enter' && applyCustom()} /></label>
+                </div>}
+            </div>
+        </div>
+    );
+}
+
+function ArtboardFrame({ page, children }) {
+    const workspaceRef = useRef(null);
+    const [workspaceSize, setWorkspaceSize] = useState({ width: 1200, height: 760 });
+    useEffect(() => {
+        const element = workspaceRef.current;
+        if (!element) return undefined;
+        const resize = () => setWorkspaceSize({ width: element.clientWidth, height: element.clientHeight });
+        resize();
+        const observer = new ResizeObserver(resize); observer.observe(element);
+        return () => observer.disconnect();
+    }, []);
+    const scale = Math.min(1, (workspaceSize.width - 64) / page.width, (workspaceSize.height - 62) / page.height);
+    return (
+        <div className="artboard-workspace" ref={workspaceRef}>
+            <div className="artboard-label">{page.name} <span>{page.width} × {page.height} px</span></div>
+            <section className="artboard-frame" style={{
+                width: page.width * scale, height: page.height * scale,
+                backgroundImage: page.backgroundImage ? `url("${page.backgroundImage}")` : undefined,
+                backgroundSize: page.backgroundFit || 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat',
+            }}>
+                {children}
+            </section>
+        </div>
+    );
+}
+
 function EditorCanvas({ diagram }) {
     const flow = useReactFlow();
-    const [nodes, setNodes] = useState(diagram?.nodes || seedNodes);
-    const [edges, setEdges] = useState(diagram?.edges || seedEdges);
+    const initialPages = useMemo(() => loadPages(diagram), [diagram]);
+    const [pages, setPages] = useState(initialPages);
+    const [activePageId, setActivePageId] = useState(initialPages[0].id);
     const [selectedNodeId, setSelectedNodeId] = useState(null);
     const [selectedEdgeId, setSelectedEdgeId] = useState(null);
     const [history, setHistory] = useState([]);
@@ -304,14 +547,26 @@ function EditorCanvas({ diagram }) {
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const dragStart = useRef(null);
     const wrapperRef = useRef(null);
+    const activePage = pages.find((page) => page.id === activePageId) || pages[0];
+    const nodes = activePage?.nodes || [];
+    const edges = activePage?.edges || [];
+
+    const setPageContent = useCallback((key, updater) => {
+        setPages((items) => items.map((page) => page.id === activePageId
+            ? { ...page, [key]: typeof updater === 'function' ? updater(page[key]) : updater }
+            : page));
+    }, [activePageId]);
+    const setNodes = useCallback((updater) => setPageContent('nodes', updater), [setPageContent]);
+    const setEdges = useCallback((updater) => setPageContent('edges', updater), [setPageContent]);
 
     useEffect(() => {
         if (diagram) return;
         try {
             const stored = JSON.parse(localStorage.getItem('flowcraft-diagram'));
-            if (stored?.nodes && stored?.edges) {
-                setNodes(stored.nodes);
-                setEdges(stored.edges);
+            if (stored?.pages?.length || (stored?.nodes && stored?.edges)) {
+                const restoredPages = loadPages(stored);
+                setPages(restoredPages);
+                setActivePageId(restoredPages[0].id);
                 setTitle(stored.title || 'Untitled workflow');
                 setFilename(stored.filename || 'untitled-workflow');
             }
@@ -324,7 +579,7 @@ function EditorCanvas({ diagram }) {
     const edgeTypes = useMemo(() => ({ workflowEdge: MemoWorkflowEdge }), []);
     const selectedNode = nodes.find((node) => node.id === selectedNodeId);
     const selectedEdge = edges.find((item) => item.id === selectedEdgeId);
-    const snapshot = useCallback(() => ({ nodes, edges }), [nodes, edges]);
+    const snapshot = useCallback(() => ({ pages, activePageId }), [pages, activePageId]);
     const remember = useCallback(() => { setHistory((items) => [...items.slice(-39), snapshot()]); setFuture([]); setSaved(false); }, [snapshot]);
 
     const updateNode = useCallback((id, patch) => {
@@ -341,15 +596,24 @@ function EditorCanvas({ diagram }) {
         const definition = SHAPES.find((item) => item.type === shape);
         const id = `node-${Date.now()}-${Math.round(Math.random() * 999)}`;
         setNodes((items) => [...items, {
-            id, type: 'workflow', position,
-            data: { label: overrides.label || definition?.label || 'New shape', shape, icon: overrides.icon || 'none', imageUrl: overrides.imageUrl || null, color: COLORS[items.length % COLORS.length] },
+            id, type: 'workflow', position, ...(overrides.style ? { style: overrides.style } : {}),
+            data: {
+                label: overrides.label || definition?.label || 'New shape',
+                richText: overrides.richText || overrides.label || definition?.label || 'New shape',
+                shape, icon: overrides.icon || 'none', imageUrl: overrides.imageUrl || null,
+                kind: overrides.kind || null, imageFit: overrides.imageFit || null,
+                hideBorder: Boolean(overrides.hideBorder),
+                color: COLORS[items.length % COLORS.length],
+            },
         }]);
         setSelectedNodeId(id); setSelectedEdgeId(null);
     }, [remember]);
 
     const addNodeFromSidebar = (shape, overrides = {}) => {
-        const center = flow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-        addNodeAt(shape, { x: center.x - 75 + nodes.length * 5, y: center.y - 40 + nodes.length * 5 }, overrides);
+        const artboard = wrapperRef.current?.querySelector('.artboard-frame')?.getBoundingClientRect();
+        const center = flow.screenToFlowPosition({ x: artboard ? artboard.left + artboard.width / 2 : window.innerWidth / 2, y: artboard ? artboard.top + artboard.height / 2 : window.innerHeight / 2 });
+        const nodeWidth = Number(overrides.style?.width) || 150; const nodeHeight = Number(overrides.style?.height) || 80;
+        addNodeAt(shape, { x: center.x - nodeWidth / 2 + nodes.length * 5, y: center.y - nodeHeight / 2 + nodes.length * 5 }, overrides);
     };
     const onDrop = useCallback((event) => {
         event.preventDefault();
@@ -375,14 +639,64 @@ function EditorCanvas({ diagram }) {
         if (!history.length) return;
         const previous = history[history.length - 1];
         setFuture((items) => [snapshot(), ...items]); setHistory((items) => items.slice(0, -1));
-        setNodes(previous.nodes); setEdges(previous.edges); setSaved(false);
+        setPages(previous.pages); setActivePageId(previous.activePageId); setSaved(false);
     }, [history, snapshot]);
     const redo = useCallback(() => {
         if (!future.length) return;
         const next = future[0];
         setHistory((items) => [...items, snapshot()]); setFuture((items) => items.slice(1));
-        setNodes(next.nodes); setEdges(next.edges); setSaved(false);
+        setPages(next.pages); setActivePageId(next.activePageId); setSaved(false);
     }, [future, snapshot]);
+
+    const selectPage = useCallback((id) => {
+        setActivePageId(id);
+        setSelectedNodeId(null); setSelectedEdgeId(null);
+        setTimeout(() => flow.fitView({ padding: 0.18, duration: 240, maxZoom: 1 }), 0);
+    }, [flow]);
+    const addPage = useCallback(() => {
+        remember();
+        const page = createPage(pages.length + 1);
+        setPages((items) => [...items, page]);
+        setActivePageId(page.id); setSelectedNodeId(null); setSelectedEdgeId(null);
+    }, [pages.length, remember]);
+    const duplicatePage = useCallback(() => {
+        remember();
+        const suffix = `-${Date.now()}`;
+        const page = createPage(pages.length + 1, {
+            name: `${activePage.name} copy`, width: activePage.width, height: activePage.height,
+            backgroundImage: activePage.backgroundImage, backgroundName: activePage.backgroundName, backgroundFit: activePage.backgroundFit,
+            nodes: activePage.nodes.map((node) => ({ ...node, id: `${node.id}${suffix}` })),
+            edges: activePage.edges.map((edge) => ({ ...edge, id: `${edge.id}${suffix}`, source: `${edge.source}${suffix}`, target: `${edge.target}${suffix}` })),
+        });
+        setPages((items) => [...items, page]); setActivePageId(page.id);
+        setSelectedNodeId(null); setSelectedEdgeId(null);
+    }, [activePage, pages.length, remember]);
+    const renamePage = useCallback((id, name) => {
+        remember(); setPages((items) => items.map((page) => page.id === id ? { ...page, name } : page));
+    }, [remember]);
+    const deletePage = useCallback(() => {
+        if (pages.length === 1) return;
+        const index = pages.findIndex((page) => page.id === activePageId);
+        if (!window.confirm(`Delete “${activePage.name}”? This can be undone.`)) return;
+        remember();
+        const nextPages = pages.filter((page) => page.id !== activePageId);
+        setPages(nextPages); setActivePageId(nextPages[Math.max(0, index - 1)].id);
+        setSelectedNodeId(null); setSelectedEdgeId(null);
+    }, [pages, activePageId, activePage, remember]);
+    const resizePage = useCallback((size) => {
+        remember();
+        setPages((items) => items.map((page) => page.id === activePageId ? { ...page, ...size } : page));
+    }, [activePageId, remember]);
+    const updatePageBackground = useCallback((patch) => {
+        remember();
+        setPages((items) => items.map((page) => page.id === activePageId ? { ...page, ...patch } : page));
+    }, [activePageId, remember]);
+    const beginResize = useCallback(() => { dragStart.current = snapshot(); }, [snapshot]);
+    const endResize = useCallback(() => {
+        if (!dragStart.current) return;
+        setHistory((items) => [...items.slice(-39), dragStart.current]);
+        setFuture([]); setSaved(false); dragStart.current = null;
+    }, []);
 
     useEffect(() => {
         const onKeyDown = (event) => {
@@ -406,9 +720,38 @@ function EditorCanvas({ diagram }) {
             const result = await response.json();
             if (!response.ok) throw new Error(result.message || 'Upload failed.');
             if (targetNodeId) updateNode(targetNodeId, { imageUrl: result.url, icon: 'none' });
-            else addNodeFromSidebar('rounded', { label: result.name || 'Uploaded media', imageUrl: result.url });
+            else {
+                const dimensions = await new Promise((resolve) => {
+                    const image = new Image();
+                    image.onload = () => resolve({ width: image.naturalWidth || 360, height: image.naturalHeight || 240 });
+                    image.onerror = () => resolve({ width: 360, height: 240 });
+                    image.src = result.url;
+                });
+                const scale = Math.min(1, 420 / dimensions.width, 300 / dimensions.height);
+                addNodeFromSidebar('image', {
+                    kind: 'image', label: result.name || file.name || 'Page image', imageUrl: result.url,
+                    imageFit: 'contain', hideBorder: true,
+                    style: { width: Math.max(60, Math.round(dimensions.width * scale)), height: Math.max(60, Math.round(dimensions.height * scale)) },
+                });
+            }
         } catch (error) {
             window.alert(error.message || 'The file could not be uploaded.');
+        } finally {
+            setUploading(false);
+        }
+    };
+    const uploadPageBackground = async (file) => {
+        if (!file) return;
+        if (file.size > 5 * 1024 * 1024) { window.alert('Please choose a file smaller than 5 MB.'); return; }
+        setUploading(true);
+        try {
+            const form = new FormData(); form.append('asset', file);
+            const response = await fetch(route('diagram-assets.store'), { method: 'POST', headers: { Accept: 'application/json' }, body: form });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || 'Import failed.');
+            updatePageBackground({ backgroundImage: result.url, backgroundName: result.name || file.name, backgroundFit: 'cover' });
+        } catch (error) {
+            window.alert(error.message || 'The page image could not be imported.');
         } finally {
             setUploading(false);
         }
@@ -421,11 +764,11 @@ function EditorCanvas({ diagram }) {
             const response = await fetch(diagram ? route('diagrams.update', diagram.id) : route('diagrams.store'), {
                 method: diagram ? 'PUT' : 'POST',
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-                body: JSON.stringify({ title: title.trim() || 'Untitled workflow', filename: cleanFilename, nodes, edges }),
+                body: JSON.stringify({ title: title.trim() || 'Untitled workflow', filename: cleanFilename, nodes, edges, pages }),
             });
             const result = await response.json();
             if (!response.ok) throw new Error(result.message || 'Save failed.');
-            localStorage.setItem('flowcraft-diagram', JSON.stringify({ title, filename: cleanFilename, nodes, edges }));
+            localStorage.setItem('flowcraft-diagram', JSON.stringify({ title, filename: cleanFilename, nodes, edges, pages }));
             setFilename(cleanFilename);
             setSaved(true);
             if (!diagram && result.edit_url) window.location.assign(result.edit_url);
@@ -435,82 +778,153 @@ function EditorCanvas({ diagram }) {
             setSaving(false);
         }
     };
-    const exportDiagram = async (format) => {
-        if (!nodes.length) return;
+    const exportDiagram = async (format, pageIds = []) => {
         setExporting(true);
-        const animatedPaths = [...wrapperRef.current.querySelectorAll('.animated-flow-edge')];
-        const originalPathStyles = animatedPaths.map((path) => ({ animation: path.style.animation, strokeDashoffset: path.style.strokeDashoffset }));
-        try {
-            const bounds = getNodesBounds(nodes);
-            const width = Math.max(1200, Math.min(2400, Math.ceil(bounds.width + 240)));
-            const height = Math.max(700, Math.min(1600, Math.ceil(bounds.height + 240)));
-            const viewport = getViewportForBounds(bounds, width, height, 0.4, 2, 0.12);
-            const viewportElement = wrapperRef.current.querySelector('.react-flow__viewport');
-            const captureOptions = {
-                backgroundColor: '#fbfbfa', width, height, pixelRatio: 1,
-                style: { width: `${width}px`, height: `${height}px`, transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` },
-            };
-            let blob;
-            if (format === 'svg') {
-                const dataUrl = await toSvg(viewportElement, captureOptions);
-                blob = await (await fetch(dataUrl)).blob();
-            } else if ((format === 'gif' || format === 'webp') && animatedPaths.length) {
-                const frameCount = 12;
-                const delay = 80;
-                const frames = [];
-                for (let frame = 0; frame < frameCount; frame += 1) {
-                    animatedPaths.forEach((path) => {
-                        path.style.animation = 'none';
-                        path.style.strokeDashoffset = `${-(frame * 3)}px`;
-                    });
-                    await new Promise((resolve) => requestAnimationFrame(resolve));
-                    frames.push(await toCanvas(viewportElement, captureOptions));
-                }
-                if (format === 'gif') {
-                    const gif = GIFEncoder();
-                    frames.forEach((canvas) => {
-                        const image = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
-                        const palette = quantize(image.data, 256);
-                        gif.writeFrame(applyPalette(image.data, palette), canvas.width, canvas.height, { palette, delay, repeat: 0 });
-                    });
-                    gif.finish();
-                    blob = new Blob([gif.bytes()], { type: 'image/gif' });
-                } else {
-                    const webpFrames = await Promise.all(frames.map((canvas) => new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.92))));
-                    blob = await createAnimatedWebp(webpFrames, frames[0].width, frames[0].height, delay);
-                }
-            } else {
-                const canvas = await toCanvas(viewportElement, captureOptions);
-                if (format === 'gif') {
-                    const image = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
-                    const palette = quantize(image.data, 256);
-                    const gif = GIFEncoder();
-                    gif.writeFrame(applyPalette(image.data, palette), canvas.width, canvas.height, { palette });
-                    gif.finish();
-                    blob = new Blob([gif.bytes()], { type: 'image/gif' });
-                } else {
-                    const mime = format === 'jpeg' ? 'image/jpeg' : `image/${format}`;
-                    blob = await new Promise((resolve) => canvas.toBlob(resolve, mime, 0.94));
-                }
-            }
-            if (!blob) throw new Error('The selected image format is not supported by this browser.');
-            const safeName = (filename || title || 'workflow').toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/(^-|-$)/g, '');
+        const originalPageId = activePageId;
+        const safeName = (filename || title || 'workflow').toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/(^-|-$)/g, '') || 'workflow';
+        const waitForPage = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const download = (blob, name) => {
             const url = URL.createObjectURL(blob);
             const anchor = document.createElement('a');
-            anchor.href = url; anchor.download = `${safeName || 'workflow'}.${format === 'jpeg' ? 'jpg' : format}`; anchor.click();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-        } catch (error) { console.error('Export failed', error); window.alert('The export could not be created. Please try again.'); }
-        finally {
-            animatedPaths.forEach((path, index) => {
-                path.style.animation = originalPathStyles[index].animation;
-                path.style.strokeDashoffset = originalPathStyles[index].strokeDashoffset;
+            anchor.href = url; anchor.download = name; anchor.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1500);
+        };
+        const capturePage = async (page, targetFormat) => {
+            const viewportElement = wrapperRef.current?.querySelector('.react-flow__viewport');
+            if (!viewportElement) throw new Error('Canvas is not ready.');
+            const width = page.width || DEFAULT_PAGE_SIZE.width;
+            const height = page.height || DEFAULT_PAGE_SIZE.height;
+            const bounds = page.nodes.length ? getNodesBounds(page.nodes) : { x: 0, y: 0, width: width * 0.6, height: height * 0.6 };
+            const viewport = getViewportForBounds(bounds, width, height, 0.02, 2, 0.12);
+            const captureOptions = {
+                width, height, pixelRatio: 1,
+                style: { width: `${width}px`, height: `${height}px`, transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` },
+                filter: (element) => !element?.classList?.contains('react-flow__resize-control')
+                    && !element?.classList?.contains('workflow-handle'),
+            };
+            const animatedPaths = [...wrapperRef.current.querySelectorAll('.animated-flow-edge')];
+            const originalStyles = animatedPaths.map((path) => ({ animation: path.style.animation, strokeDashoffset: path.style.strokeDashoffset }));
+            const selectionVisuals = [...wrapperRef.current.querySelectorAll('.workflow-node.is-selected, .react-flow__node.selected, .react-flow__edge.selected')];
+            const selectionClasses = selectionVisuals.map((element) => element.classList.contains('is-selected') ? 'is-selected' : 'selected');
+            selectionVisuals.forEach((element, index) => element.classList.remove(selectionClasses[index]));
+            const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+                const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob);
             });
+            let backgroundImage = null;
+            let backgroundDataUrl = null;
+            if (page.backgroundImage) {
+                const backgroundBlob = await (await fetch(page.backgroundImage)).blob();
+                backgroundDataUrl = await blobToDataUrl(backgroundBlob);
+                backgroundImage = await new Promise((resolve, reject) => {
+                    const image = new Image(); image.onload = () => resolve(image); image.onerror = reject; image.src = backgroundDataUrl;
+                });
+            }
+            const composePage = (contentCanvas) => {
+                const output = document.createElement('canvas'); output.width = width; output.height = height;
+                const context = output.getContext('2d'); context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height);
+                if (backgroundImage) {
+                    if ((page.backgroundFit || 'cover') === 'fill') context.drawImage(backgroundImage, 0, 0, width, height);
+                    else {
+                        const scale = (page.backgroundFit || 'cover') === 'contain'
+                            ? Math.min(width / backgroundImage.naturalWidth, height / backgroundImage.naturalHeight)
+                            : Math.max(width / backgroundImage.naturalWidth, height / backgroundImage.naturalHeight);
+                        const drawWidth = backgroundImage.naturalWidth * scale; const drawHeight = backgroundImage.naturalHeight * scale;
+                        context.drawImage(backgroundImage, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+                    }
+                }
+                context.drawImage(contentCanvas, 0, 0, width, height);
+                return output;
+            };
+            try {
+                if (targetFormat === 'svg') {
+                    const contentUrl = await toSvg(viewportElement, captureOptions);
+                    const contentDataUrl = await blobToDataUrl(await (await fetch(contentUrl)).blob());
+                    const fit = page.backgroundFit === 'fill' ? 'none' : page.backgroundFit === 'contain' ? 'xMidYMid meet' : 'xMidYMid slice';
+                    const background = backgroundDataUrl ? `<image href="${backgroundDataUrl}" width="${width}" height="${height}" preserveAspectRatio="${fit}"/>` : '';
+                    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fff"/>${background}<image href="${contentDataUrl}" width="${width}" height="${height}"/></svg>`;
+                    return new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+                }
+                if ((targetFormat === 'gif' || targetFormat === 'webp') && animatedPaths.length) {
+                    const delay = 80;
+                    const frames = [];
+                    for (let frame = 0; frame < 12; frame += 1) {
+                        animatedPaths.forEach((path) => { path.style.animation = 'none'; path.style.strokeDashoffset = `${-(frame * 3)}px`; });
+                        await new Promise((resolve) => requestAnimationFrame(resolve));
+                        frames.push(composePage(await toCanvas(viewportElement, captureOptions)));
+                    }
+                    if (targetFormat === 'gif') {
+                        const gif = GIFEncoder();
+                        frames.forEach((canvas) => {
+                            const image = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+                            const palette = quantize(image.data, 256);
+                            gif.writeFrame(applyPalette(image.data, palette), canvas.width, canvas.height, { palette, delay, repeat: 0 });
+                        });
+                        gif.finish();
+                        return new Blob([gif.bytes()], { type: 'image/gif' });
+                    }
+                    const webpFrames = await Promise.all(frames.map((canvas) => new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.92))));
+                    return createAnimatedWebp(webpFrames, width, height, delay);
+                }
+                const canvas = composePage(await toCanvas(viewportElement, captureOptions));
+                if (targetFormat === 'gif') {
+                    const image = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+                    const palette = quantize(image.data, 256);
+                    const gif = GIFEncoder(); gif.writeFrame(applyPalette(image.data, palette), canvas.width, canvas.height, { palette }); gif.finish();
+                    return new Blob([gif.bytes()], { type: 'image/gif' });
+                }
+                const mime = targetFormat === 'jpeg' ? 'image/jpeg' : `image/${targetFormat}`;
+                return await new Promise((resolve) => canvas.toBlob(resolve, mime, 0.94));
+            } finally {
+                selectionVisuals.forEach((element, index) => element.classList.add(selectionClasses[index]));
+                animatedPaths.forEach((path, index) => {
+                    path.style.animation = originalStyles[index].animation;
+                    path.style.strokeDashoffset = originalStyles[index].strokeDashoffset;
+                });
+            }
+        };
+
+        try {
+            const selectedIds = new Set(pageIds);
+            const targetPages = pages.filter((page) => selectedIds.has(page.id));
+            if (!targetPages.length) throw new Error('Select at least one page to export.');
+            const captures = [];
+            for (const page of targetPages) {
+                setActivePageId(page.id);
+                await waitForPage();
+                captures.push({ page, blob: await capturePage(page, format === 'pdf' ? 'png' : format) });
+            }
+            if (format === 'pdf') {
+                const first = captures[0].page;
+                const pdf = new jsPDF({ orientation: first.width >= first.height ? 'landscape' : 'portrait', unit: 'px', format: [first.width, first.height], hotfixes: ['px_scaling'] });
+                for (let index = 0; index < captures.length; index += 1) {
+                    const { page, blob } = captures[index];
+                    if (index) pdf.addPage([page.width, page.height], page.width >= page.height ? 'landscape' : 'portrait');
+                    const dataUrl = await new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(blob); });
+                    pdf.addImage(dataUrl, 'PNG', 0, 0, page.width, page.height, undefined, 'FAST');
+                }
+                pdf.save(`${safeName}.pdf`);
+            } else if (captures.length === 1) {
+                download(captures[0].blob, `${safeName}.${format === 'jpeg' ? 'jpg' : format}`);
+            } else {
+                const zip = new JSZip();
+                const extension = format === 'jpeg' ? 'jpg' : format;
+                captures.forEach(({ page, blob }, index) => {
+                    const pageName = page.name.toLowerCase().replace(/[^a-z0-9-_]+/g, '-') || `page-${index + 1}`;
+                    zip.file(`${String(index + 1).padStart(2, '0')}-${pageName}.${extension}`, blob);
+                });
+                download(await zip.generateAsync({ type: 'blob' }), `${safeName}-${extension}-pages.zip`);
+            }
+        } catch (error) {
+            console.error('Export failed', error);
+            window.alert('The export could not be created. Please try again.');
+        } finally {
+            setActivePageId(originalPageId);
             setExporting(false);
         }
     };
 
     return (
-        <ACTIONS.Provider value={useMemo(() => ({ updateNode }), [updateNode])}>
+        <ACTIONS.Provider value={useMemo(() => ({ updateNode, beginResize, endResize }), [updateNode, beginResize, endResize])}>
             <div className="diagram-app">
                 <header className="editor-header">
                     <div className="editor-brand-wrap"><a href={route('dashboard')} className="back-to-dashboard" title="Back to diagrams"><ArrowLeft size={18} /></a><a href={route('dashboard')} className="brand"><span className="brand-mark"><Network size={21} /></span><span>Flowcraft</span></a></div>
@@ -521,13 +935,20 @@ function EditorCanvas({ diagram }) {
                     <div className="header-actions">
                         <ToolButton icon={Undo2} label="Undo" onClick={undo} disabled={!history.length} /><ToolButton icon={Redo2} label="Redo" onClick={redo} disabled={!future.length} />
                         <span className="toolbar-divider" /><button type="button" className="save-button" onClick={saveDiagram} disabled={saving}><Save size={16} /> {saving ? 'Saving...' : 'Save'}</button>
-                        <ExportMenu onExport={exportDiagram} exporting={exporting} filename={filename} onFilenameChange={(value) => { setFilename(value); setSaved(false); }} /><button type="button" className="avatar" title="Your profile">SW</button>
+                        <ExportMenu onExport={exportDiagram} exporting={exporting} filename={filename} onFilenameChange={(value) => { setFilename(value); setSaved(false); }} pages={pages} /><button type="button" className="avatar" title="Your profile">SW</button>
                     </div>
                 </header>
                 <div className="editor-body">
                     <Sidebar onAddNode={addNodeFromSidebar} onUpload={uploadAsset} uploading={uploading} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} />
                     <main className="canvas-shell" ref={wrapperRef}>
-                        <ReactFlow
+                        <PageControls
+                            page={activePage} elementCount={nodes.length} onResize={resizePage}
+                            onAddImage={uploadAsset} onImportBackground={uploadPageBackground} importing={uploading}
+                            onBackgroundFit={(backgroundFit) => updatePageBackground({ backgroundFit })}
+                            onRemoveBackground={() => updatePageBackground({ backgroundImage: null, backgroundName: null })}
+                        />
+                        <ArtboardFrame page={activePage}><ReactFlow
+                            key={activePage.id}
                             nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
                             onNodesChange={(changes) => setNodes((items) => applyNodeChanges(changes, items))}
                             onEdgesChange={(changes) => setEdges((items) => applyEdgeChanges(changes, items))}
@@ -544,12 +965,13 @@ function EditorCanvas({ diagram }) {
                             <Background color="#d8d8dd" gap={22} size={1.1} /><Controls position="bottom-left" showInteractive={false} />
                             <MiniMap position="bottom-right" pannable zoomable nodeColor={(node) => node.data.color.value} maskColor="rgba(247,247,248,.78)" />
                             <Panel position="top-center" className="canvas-toolbar">
-                                <ToolButton icon={MousePointer2} label="Select" active /><ToolButton icon={Type} label="Add text" onClick={() => addNodeFromSidebar('rounded', { label: 'Your text' })} />
+                                <ToolButton icon={MousePointer2} label="Select" active /><ToolButton icon={Type} label="Add rich text" onClick={() => addNodeFromSidebar('text', { label: 'Start typing' })} />
                                 <ToolButton icon={MessageSquareText} label="Add note" onClick={() => addNodeFromSidebar('document', { label: 'Add a note' })} /><span className="toolbar-divider" />
                                 <ToolButton icon={Grid2X2} label="Fit view" onClick={() => flow.fitView({ padding: 0.25, duration: 300 })} />
                             </Panel>
-                        </ReactFlow>
+                        </ReactFlow></ArtboardFrame>
                         <PropertiesPanel selectedNode={selectedNode} selectedEdge={selectedEdge} onUpdateNode={updateNode} onUpdateEdge={updateEdge} onUpload={uploadAsset} uploading={uploading} onDelete={deleteSelection} onClose={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }} />
+                        <PagesBar pages={pages} activePageId={activePageId} onSelect={selectPage} onAdd={addPage} onDuplicate={duplicatePage} onRename={renamePage} onDelete={deletePage} />
                     </main>
                 </div>
             </div>
