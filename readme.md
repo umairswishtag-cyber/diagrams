@@ -9,7 +9,7 @@ Follow these steps to set up the boilerplate for your Shopify app (embedded and 
 First, clone the repository to your local machine:
 
 ```bash
-git clone https://github.com/Haseeb9229/laravel-shopify-react-starter-kit.git
+git clone https://github.com/umair/laravel-shopify-react-starter-kit.git
 cd laravel-shopify-react-starter-kit
 ```
 
