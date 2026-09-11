@@ -264,6 +264,7 @@ button { color: inherit; }
 .layers-help { margin: 13px 3px 0; line-height: 1.45; }
 
 .canvas-shell { flex: 1; min-width: 0; height: 100%; position: relative; overflow: hidden; background: #e9e9ec; }
+.canvas-shell.is-expanded { position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100dvh; margin: 0 !important; }
 .artboard-controls { position: absolute; z-index: 12; left: 0; right: 0; top: 0; min-height: 58px; padding: 8px 18px; border-bottom: 1px solid #dedde2; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: rgba(250, 250, 251, .96); }
 .artboard-summary { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
 .artboard-controls strong { font-size: 12px; }
@@ -272,6 +273,8 @@ button { color: inherit; }
 .artboard-controls label { display: flex; align-items: center; gap: 6px; color: #8b8892; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .artboard-controls select { height: 30px; padding: 0 25px 0 8px; border: 1px solid #d9d7dd; border-radius: 7px; color: #55525d; background: #fff; font-size: 10px; outline: 0; }
 .page-import-button { height: 31px; padding: 0 9px; border: 1px solid #d6d1fc; border-radius: 7px; color: #6251dc !important; background: #f4f2ff; cursor: pointer; }.page-import-button:hover { border-color: #9e93f6; }.page-import-button input { display: none; }
+.page-top-box-button { height: 31px; padding: 0 9px; border: 1px solid #d9d7dd; border-radius: 7px; display: inline-flex; align-items: center; gap: 6px; color: #66626d; background: #fff; font-size: 10px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.page-top-box-button:hover, .page-top-box-button.is-active { color: var(--purple); border-color: #aaa0ff; background: #f2f0ff; }
 .page-add-image { color: #fff !important; border-color: var(--purple); background: var(--purple); }.page-add-image:hover { border-color: var(--purple-dark); background: var(--purple-dark); }
 .remove-page-image { width: 29px; height: 29px; padding: 0; border: 1px solid #ead1cd; border-radius: 7px; display: grid; place-items: center; color: #c85848; background: #fff5f3; cursor: pointer; }
 .custom-page-size { display: flex; align-items: center; gap: 4px; }.custom-page-size label { height: 30px; padding: 0 5px; border: 1px solid #d9d7dd; border-radius: 7px; gap: 3px; background: #fff; }.custom-page-size label span { color: #9a96a0; font-size: 8px; font-weight: 800; }.custom-page-size input { width: 55px; padding: 0; border: 0; outline: 0; color: #514d58; background: transparent; font-size: 10px; }.custom-page-size b { color: #9b98a1; font-size: 10px; }
@@ -279,6 +282,9 @@ button { color: inherit; }
 .artboard-label { position: absolute; left: 18px; top: 13px; z-index: 2; color: #77747e; font-size: 10px; font-weight: 700; }
 .artboard-label span { margin-left: 7px; color: #9f9ca4; font-weight: 500; }
 .artboard-frame { position: relative; flex: 0 0 auto; overflow: hidden; background: #fff; box-shadow: 0 1px 2px rgba(26, 25, 31, .18), 0 14px 45px rgba(35, 32, 48, .15); }
+.artboard-paper-pattern { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.artboard-top-box { position: absolute; inset: 0 0 auto; z-index: 0; box-sizing: border-box; border-style: solid; border-color: #cfd3da; background: #fff; pointer-events: none; }
+.artboard-frame > .react-flow { position: relative; z-index: 1; }
 .canvas-shell .react-flow { background: transparent; }
 .canvas-shell .react-flow__background { opacity: .72; }
 .canvas-toolbar { top: 14px !important; display: flex; align-items: center; gap: 2px; padding: 5px; border: 1px solid #e4e2e8; border-radius: 12px; background: rgba(255, 255, 255, .95); box-shadow: 0 7px 24px rgba(36, 31, 60, .08); }
@@ -554,6 +560,9 @@ button { color: inherit; }
     .editor-sidebar { position: absolute; top: 72px; bottom: 0; left: 0; box-shadow: 8px 0 30px rgba(35, 30, 58, .1); }
     .editor-sidebar.is-collapsed { box-shadow: none; }
     .canvas-shell { margin-left: 58px; }
+    .artboard-controls { padding-inline: 10px; overflow-x: auto; }
+    .artboard-summary { display: none; }
+    .page-settings { width: 100%; flex-wrap: nowrap; justify-content: flex-start; }
     .properties-panel { right: 10px; width: 210px; }
     .dashboard-header { grid-template-columns: 1fr auto; padding: 0 16px; }
     .dashboard-header nav { display: none; }

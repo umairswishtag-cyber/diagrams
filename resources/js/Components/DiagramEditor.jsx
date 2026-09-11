@@ -1,7 +1,7 @@
 import {
     Background, BaseEdge, ConnectionMode, Controls, Handle, MarkerType, MiniMap, NodeResizer,
     Panel, Position, ReactFlow, ReactFlowProvider, addEdge, applyEdgeChanges,
-    applyNodeChanges, getNodesBounds, getSmoothStepPath, getViewportForBounds, useReactFlow,
+    applyNodeChanges, getSmoothStepPath, useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import '@fontsource-variable/inter/wght.css';
@@ -46,8 +46,8 @@ import {
     AlignCenter, AlignLeft, AlignRight, AppWindow, ArrowDown, ArrowLeft, ArrowUp, Bold, Box,
     Braces, BringToFront, Check, ChevronDown, Circle as CircleIcon, Cloud, Code2, Copy,
     Database, Diamond, Download, FileText, GitBranch, Grid2X2, GripVertical,
-    Image as ImageIcon, Italic, Layers3, List, ListOrdered, LogOut, Menu, MessageSquareText,
-    MousePointer2, Network, PanelBottom, Play, Plus, Redo2, Save, SendToBack, Server,
+    Image as ImageIcon, Italic, Layers3, List, ListOrdered, LogOut, Maximize2, Menu, MessageSquareText,
+    Minimize2, MousePointer2, Network, PanelBottom, PanelTop, Play, Plus, Redo2, Save, SendToBack, Server,
     Settings, Shapes, Sparkles, Square, Trash2, Type, Underline, Undo2, Upload, Users, X, Zap,
 } from 'lucide-react';
 import { getFontEmbedCSS, toCanvas, toSvg } from 'html-to-image';
@@ -124,6 +124,126 @@ const PAGE_SIZES = {
     'A4 portrait': { width: 794, height: 1123 },
     'Web': { width: 1440, height: 900 },
 };
+
+const PAPER_STYLES = [
+    { value: 'plain', label: 'Plain page' },
+    { value: 'narrow-lines', label: 'Narrow lines' },
+    { value: 'wide-lines', label: 'Wide lines' },
+    { value: 'four-lines', label: 'Four lines (English)' },
+    { value: 'boxes', label: 'Boxes (Math)' },
+    { value: 'graph-dots', label: 'Graph dots' },
+];
+const TOP_BOX_HEIGHT = 112;
+
+function paperBackgroundStyle(style = 'plain', scale = 1) {
+    const unit = (value) => `${Math.max(0.65, value * scale)}px`;
+    const blue = 'rgba(91, 145, 198, .42)';
+    const softBlue = 'rgba(91, 145, 198, .3)';
+    if (style === 'narrow-lines' || style === 'wide-lines') {
+        const spacing = (style === 'narrow-lines' ? 28 : 48) * scale;
+        return {
+            backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent calc(${spacing}px - ${unit(1)}), ${blue} calc(${spacing}px - ${unit(1)}), ${blue} ${spacing}px)`,
+        };
+    }
+    if (style === 'boxes') {
+        const spacing = 32 * scale;
+        return {
+            backgroundImage: `linear-gradient(${softBlue} ${unit(1)}, transparent ${unit(1)}), linear-gradient(90deg, ${softBlue} ${unit(1)}, transparent ${unit(1)})`,
+            backgroundSize: `${spacing}px ${spacing}px`,
+        };
+    }
+    if (style === 'graph-dots') {
+        const spacing = 24 * scale;
+        return {
+            backgroundImage: 'radial-gradient(circle, rgba(72, 105, 139, .55) 1.15px, transparent 1.3px)',
+            backgroundSize: `${spacing}px ${spacing}px`,
+        };
+    }
+    if (style === 'four-lines') {
+        const group = 90 * scale;
+        const offsets = [0, 18, 36, 54].map((value) => value * scale);
+        const line = (color) => `linear-gradient(to bottom, ${color} ${unit(1)}, transparent ${unit(1)})`;
+        return {
+            backgroundImage: [line('rgba(214, 103, 103, .48)'), line(blue), line(blue), line('rgba(214, 103, 103, .48)')].join(', '),
+            backgroundSize: `100% ${group}px`,
+            backgroundPosition: offsets.map((offset) => `0 ${offset}px`).join(', '),
+        };
+    }
+    return {};
+}
+
+function drawPaperPattern(context, style, width, height) {
+    if (!style || style === 'plain') return;
+    context.save();
+    context.lineWidth = 1;
+    const drawHorizontalLines = (spacing, color = '#b9cee4') => {
+        context.strokeStyle = color;
+        context.beginPath();
+        for (let y = spacing; y < height; y += spacing) { context.moveTo(0, y - 0.5); context.lineTo(width, y - 0.5); }
+        context.stroke();
+    };
+    if (style === 'narrow-lines') drawHorizontalLines(28);
+    if (style === 'wide-lines') drawHorizontalLines(48);
+    if (style === 'boxes') {
+        drawHorizontalLines(32, '#c3d4e5');
+        context.strokeStyle = '#c3d4e5'; context.beginPath();
+        for (let x = 32; x < width; x += 32) { context.moveTo(x - 0.5, 0); context.lineTo(x - 0.5, height); }
+        context.stroke();
+    }
+    if (style === 'four-lines') {
+        for (let group = 0; group < height; group += 90) {
+            [0, 18, 36, 54].forEach((offset, index) => {
+                const y = group + offset;
+                if (y >= height) return;
+                context.strokeStyle = index === 0 || index === 3 ? '#dfa5a5' : '#b9cee4';
+                context.beginPath(); context.moveTo(0, y + 0.5); context.lineTo(width, y + 0.5); context.stroke();
+            });
+        }
+    }
+    if (style === 'graph-dots') {
+        context.fillStyle = '#8199b0';
+        for (let y = 24; y < height; y += 24) for (let x = 24; x < width; x += 24) {
+            context.beginPath(); context.arc(x, y, 1.25, 0, Math.PI * 2); context.fill();
+        }
+    }
+    context.restore();
+}
+
+function paperPatternSvg(style, width, height) {
+    if (!style || style === 'plain') return '';
+    const id = `paper-${style}`;
+    let content = '';
+    let patternWidth = width;
+    let patternHeight = height;
+    if (style === 'narrow-lines' || style === 'wide-lines') {
+        patternWidth = 1; patternHeight = style === 'narrow-lines' ? 28 : 48;
+        content = `<path d="M0 ${patternHeight - 0.5}H1" stroke="#b9cee4"/>`;
+    } else if (style === 'boxes') {
+        patternWidth = 32; patternHeight = 32;
+        content = '<path d="M0 31.5H32M31.5 0V32" fill="none" stroke="#c3d4e5"/>';
+    } else if (style === 'graph-dots') {
+        patternWidth = 24; patternHeight = 24;
+        content = '<circle cx="12" cy="12" r="1.25" fill="#8199b0"/>';
+    } else if (style === 'four-lines') {
+        patternWidth = 1; patternHeight = 90;
+        content = '<path d="M0 .5H1M0 53.5H1" stroke="#dfa5a5"/><path d="M0 18.5H1M0 36.5H1" stroke="#b9cee4"/>';
+    }
+    return `<defs><pattern id="${id}" width="${patternWidth}" height="${patternHeight}" patternUnits="userSpaceOnUse">${content}</pattern></defs><rect width="${width}" height="${height}" fill="url(#${id})"/>`;
+}
+
+function drawTopBox(context, width) {
+    context.save();
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, width, TOP_BOX_HEIGHT);
+    context.strokeStyle = '#cfd3da';
+    context.lineWidth = 1;
+    context.strokeRect(0.5, 0.5, width - 1, TOP_BOX_HEIGHT - 1);
+    context.restore();
+}
+
+function topBoxSvg(width) {
+    return `<rect x="0.5" y="0.5" width="${width - 1}" height="${TOP_BOX_HEIGHT - 1}" fill="#fff" stroke="#cfd3da"/>`;
+}
 
 function plainText(html = '') {
     if (typeof document === 'undefined') return html.replace(/<[^>]*>/g, '');
@@ -202,6 +322,8 @@ function createPage(number, content = {}) {
         ...DEFAULT_PAGE_SIZE,
         nodes: [],
         edges: [],
+        paperStyle: 'plain',
+        showTopBox: false,
         ...content,
     };
 }
@@ -226,6 +348,8 @@ function loadPages(diagram) {
         height: Number(page.height) || DEFAULT_PAGE_SIZE.height,
         nodes: normalizeLayerNodes(Array.isArray(page.nodes) ? page.nodes : []),
         edges: Array.isArray(page.edges) ? page.edges : [],
+        paperStyle: PAPER_STYLES.some((style) => style.value === page.paperStyle) ? page.paperStyle : 'plain',
+        showTopBox: Boolean(page.showTopBox),
     }));
 }
 
@@ -661,7 +785,7 @@ function ExportMenu({ onExport, exporting, filename, onFilenameChange, pages }) 
     );
 }
 
-function PageControls({ page, elementCount, onResize, onAddImage, onImportBackground, importing, onBackgroundFit, onRemoveBackground }) {
+function PageControls({ page, elementCount, onResize, onAddImage, onImportBackground, importing, onBackgroundFit, onRemoveBackground, onPaperStyle, onTopBox, expanded, onToggleExpanded }) {
     const preset = Object.entries(PAGE_SIZES).find(([, size]) => size.width === page.width && size.height === page.height)?.[0] || 'Custom';
     const [custom, setCustom] = useState({ width: page.width, height: page.height });
     const [selectedPreset, setSelectedPreset] = useState(preset);
@@ -674,6 +798,12 @@ function PageControls({ page, elementCount, onResize, onAddImage, onImportBackgr
         <div className="artboard-controls">
             <div className="artboard-summary"><strong>{page.name}</strong><span>{elementCount} elements</span></div>
             <div className="page-settings">
+                <label>Paper<select value={page.paperStyle || 'plain'} onChange={(event) => onPaperStyle(event.target.value)}>
+                    {PAPER_STYLES.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
+                </select></label>
+                <button type="button" className={`page-top-box-button ${page.showTopBox ? 'is-active' : ''}`} onClick={() => onTopBox(!page.showTopBox)} aria-pressed={Boolean(page.showTopBox)} title={page.showTopBox ? 'Hide the top information box' : 'Show a top information box'}>
+                    <PanelTop size={14} /> Top box
+                </button>
                 <label className="page-import-button page-add-image"><ImageIcon size={14} />{importing ? 'Uploading…' : 'Add image'}
                     <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,.gif,image/*" disabled={importing} onChange={(event) => { onAddImage(event.target.files?.[0]); event.target.value = ''; }} />
                 </label>
@@ -694,6 +824,7 @@ function PageControls({ page, elementCount, onResize, onAddImage, onImportBackgr
                     <b>×</b>
                     <label><span>H</span><input type="number" min="240" max="4000" value={custom.height} onChange={(event) => setCustom((value) => ({ ...value, height: event.target.value }))} onBlur={applyCustom} onKeyDown={(event) => event.key === 'Enter' && applyCustom()} /></label>
                 </div>}
+                <ToolButton icon={expanded ? Minimize2 : Maximize2} label={expanded ? 'Restore canvas size' : 'Expand canvas'} onClick={onToggleExpanded} active={expanded} />
             </div>
         </div>
     );
@@ -710,7 +841,7 @@ function ArtboardFrame({ page, children }) {
         const observer = new ResizeObserver(resize); observer.observe(element);
         return () => observer.disconnect();
     }, []);
-    const scale = Math.min(1, (workspaceSize.width - 64) / page.width, (workspaceSize.height - 62) / page.height);
+    const scale = Math.max(0.1, Math.min(1, (workspaceSize.width - 64) / page.width, (workspaceSize.height - 62) / page.height));
     return (
         <div className="artboard-workspace" ref={workspaceRef}>
             <div className="artboard-label">{page.name} <span>{page.width} × {page.height} px</span></div>
@@ -719,6 +850,8 @@ function ArtboardFrame({ page, children }) {
                 backgroundImage: page.backgroundImage ? `url("${page.backgroundImage}")` : undefined,
                 backgroundSize: page.backgroundFit || 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat',
             }}>
+                <div className="artboard-paper-pattern" style={paperBackgroundStyle(page.paperStyle, scale)} aria-hidden="true" />
+                {page.showTopBox && <div className="artboard-top-box" style={{ height: TOP_BOX_HEIGHT * scale, borderWidth: Math.max(0.65, scale) }} aria-hidden="true" />}
                 {children}
             </section>
         </div>
@@ -744,11 +877,53 @@ function EditorCanvas({ diagram }) {
     const [exporting, setExporting] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [canvasExpanded, setCanvasExpanded] = useState(false);
     const dragStart = useRef(null);
     const wrapperRef = useRef(null);
+    const pageViewports = useRef(new Map(initialPages.filter((page) => page.viewport).map((page) => [page.id, page.viewport])));
     const activePage = pages.find((page) => page.id === activePageId) || pages[0];
     const nodes = activePage?.nodes || [];
     const edges = activePage?.edges || [];
+
+    const rememberPageViewport = useCallback((page, viewport) => {
+        const flowElement = wrapperRef.current?.querySelector('.react-flow');
+        if (!page || !viewport || !flowElement?.clientWidth || !flowElement?.clientHeight) return;
+        const scaleX = page.width / flowElement.clientWidth;
+        const scaleY = page.height / flowElement.clientHeight;
+        pageViewports.current.set(page.id, {
+            x: viewport.x * scaleX,
+            y: viewport.y * scaleY,
+            zoom: viewport.zoom * scaleX,
+        });
+    }, []);
+
+    const restorePageViewport = useCallback((page, viewport, instance = flow) => {
+        const flowElement = wrapperRef.current?.querySelector('.react-flow');
+        if (!page || !viewport || !flowElement?.clientWidth || !flowElement?.clientHeight) return false;
+        const scaleX = flowElement.clientWidth / page.width;
+        const scaleY = flowElement.clientHeight / page.height;
+        instance.setViewport({ x: viewport.x * scaleX, y: viewport.y * scaleY, zoom: viewport.zoom * scaleX }, { duration: 0 });
+        return true;
+    }, [flow]);
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            const viewport = pageViewports.current.get(activePage?.id);
+            if (!restorePageViewport(activePage, viewport)) flow.fitView({ padding: 0.2, duration: 260, maxZoom: 1.05 });
+        }, 40);
+        return () => clearTimeout(timer);
+    }, [canvasExpanded, activePageId, flow, restorePageViewport]);
+
+    useEffect(() => {
+        const restoreOnEscape = (event) => { if (event.key === 'Escape') setCanvasExpanded(false); };
+        window.addEventListener('keydown', restoreOnEscape);
+        return () => window.removeEventListener('keydown', restoreOnEscape);
+    }, []);
+
+    const toggleCanvasExpanded = useCallback(() => {
+        rememberPageViewport(activePage, flow.getViewport());
+        setCanvasExpanded((value) => !value);
+    }, [activePage, flow, rememberPageViewport]);
 
     const setPageContent = useCallback((key, updater) => {
         setPages((items) => items.map((page) => page.id === activePageId
@@ -765,6 +940,7 @@ function EditorCanvas({ diagram }) {
             if (stored?.pages?.length || (stored?.nodes && stored?.edges)) {
                 const restoredPages = loadPages(stored);
                 setPages(restoredPages);
+                pageViewports.current = new Map(restoredPages.filter((page) => page.viewport).map((page) => [page.id, page.viewport]));
                 setActivePageId(restoredPages[0].id);
                 setTitle(stored.title || 'Untitled workflow');
                 setFilename(stored.filename || 'untitled-workflow');
@@ -850,10 +1026,10 @@ function EditorCanvas({ diagram }) {
     }, [future, snapshot]);
 
     const selectPage = useCallback((id) => {
+        rememberPageViewport(activePage, flow.getViewport());
         setActivePageId(id);
         setSelectedNodeId(null); setSelectedEdgeId(null);
-        setTimeout(() => flow.fitView({ padding: 0.18, duration: 240, maxZoom: 1 }), 0);
-    }, [flow]);
+    }, [activePage, flow, rememberPageViewport]);
     const addPage = useCallback(() => {
         remember();
         const page = createPage(pages.length + 1);
@@ -863,12 +1039,17 @@ function EditorCanvas({ diagram }) {
     const duplicatePage = useCallback(() => {
         remember();
         const suffix = `-${Date.now()}`;
+        const viewport = pageViewports.current.get(activePage.id) || activePage.viewport;
         const page = createPage(pages.length + 1, {
             name: `${activePage.name} copy`, width: activePage.width, height: activePage.height,
             backgroundImage: activePage.backgroundImage, backgroundName: activePage.backgroundName, backgroundFit: activePage.backgroundFit, backgroundType: activePage.backgroundType,
+            paperStyle: activePage.paperStyle || 'plain',
+            showTopBox: Boolean(activePage.showTopBox),
+            ...(viewport ? { viewport } : {}),
             nodes: activePage.nodes.map((node) => ({ ...node, id: `${node.id}${suffix}` })),
             edges: activePage.edges.map((edge) => ({ ...edge, id: `${edge.id}${suffix}`, source: `${edge.source}${suffix}`, target: `${edge.target}${suffix}` })),
         });
+        if (viewport) pageViewports.current.set(page.id, viewport);
         setPages((items) => [...items, page]); setActivePageId(page.id);
         setSelectedNodeId(null); setSelectedEdgeId(null);
     }, [activePage, pages.length, remember]);
@@ -886,6 +1067,7 @@ function EditorCanvas({ diagram }) {
     }, [pages, activePageId, activePage, remember]);
     const resizePage = useCallback((size) => {
         remember();
+        pageViewports.current.delete(activePageId);
         setPages((items) => items.map((page) => page.id === activePageId ? { ...page, ...size } : page));
     }, [activePageId, remember]);
     const updatePageBackground = useCallback((patch) => {
@@ -1000,14 +1182,19 @@ function EditorCanvas({ diagram }) {
     const saveDiagram = async () => {
         setSaving(true);
         try {
+            rememberPageViewport(activePage, flow.getViewport());
+            const savedPages = pages.map((page) => {
+                const viewport = pageViewports.current.get(page.id);
+                return viewport ? { ...page, viewport } : page;
+            });
             const cleanFilename = filename.trim() || title.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'workflow';
-            const input = { title: title.trim() || 'Untitled workflow', filename: cleanFilename, nodes, edges, pages };
+            const input = { title: title.trim() || 'Untitled workflow', filename: cleanFilename, nodes, edges, pages: savedPages };
             const operation = diagram
                 ? `mutation UpdateDiagram($id: ID!, $input: DiagramInput!) { updateDiagram(id: $id, input: $input) { id } }`
                 : `mutation CreateDiagram($input: DiagramInput!) { createDiagram(input: $input) { id } }`;
             const result = await graphqlRequest(operation, diagram ? { id: diagram.id, input } : { input });
             const savedDiagram = diagram ? result.updateDiagram : result.createDiagram;
-            localStorage.setItem(draftStorageKey, JSON.stringify({ title, filename: cleanFilename, nodes, edges, pages }));
+            localStorage.setItem(draftStorageKey, JSON.stringify({ title, filename: cleanFilename, nodes, edges, pages: savedPages }));
             setFilename(cleanFilename);
             setSaved(true);
             if (!diagram && savedDiagram?.id) window.location.assign(route('diagrams.edit', savedDiagram.id));
@@ -1018,6 +1205,7 @@ function EditorCanvas({ diagram }) {
         }
     };
     const exportDiagram = async (format, pageIds = []) => {
+        rememberPageViewport(activePage, flow.getViewport());
         setExporting(true);
         const originalPageId = activePageId;
         const pdfVectorLayouts = new Map();
@@ -1063,9 +1251,10 @@ function EditorCanvas({ diagram }) {
             const height = page.height || DEFAULT_PAGE_SIZE.height;
             const pageNodeIds = new Set(page.nodes.map((node) => node.id));
             const renderedNodes = flow.getNodes().filter((node) => pageNodeIds.has(node.id));
-            const boundsNodes = renderedNodes.length === page.nodes.length ? renderedNodes : page.nodes;
-            const bounds = boundsNodes.length ? getNodesBounds(boundsNodes) : { x: 0, y: 0, width: width * 0.6, height: height * 0.6 };
-            const viewport = getViewportForBounds(bounds, width, height, 0.02, 2, 0.12);
+            const viewport = pageViewports.current.get(page.id) || (() => {
+                rememberPageViewport(page, flow.getViewport());
+                return pageViewports.current.get(page.id);
+            })() || { x: 0, y: 0, zoom: 1 };
             if (document.fonts?.ready) await document.fonts.ready;
             let fontEmbedCSS = '';
             try {
@@ -1143,6 +1332,8 @@ function EditorCanvas({ diagram }) {
                         context.drawImage(backgroundImage, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
                     }
                 }
+                drawPaperPattern(context, page.paperStyle, width, height);
+                if (page.showTopBox) drawTopBox(context, width);
                 context.drawImage(contentCanvas, 0, 0, width, height);
                 return output;
             };
@@ -1152,7 +1343,9 @@ function EditorCanvas({ diagram }) {
                     const contentDataUrl = await blobToDataUrl(await (await fetch(contentUrl)).blob());
                     const fit = page.backgroundFit === 'fill' ? 'none' : page.backgroundFit === 'contain' ? 'xMidYMid meet' : 'xMidYMid slice';
                     const background = backgroundDataUrl ? `<image href="${backgroundDataUrl}" width="${width}" height="${height}" preserveAspectRatio="${fit}"/>` : '';
-                    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fff"/>${background}<image href="${contentDataUrl}" width="${width}" height="${height}"/></svg>`;
+                    const paper = paperPatternSvg(page.paperStyle, width, height);
+                    const topBox = page.showTopBox ? topBoxSvg(width) : '';
+                    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fff"/>${background}${paper}${topBox}<image href="${contentDataUrl}" width="${width}" height="${height}"/></svg>`;
                     return new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
                 }
                 if ((targetFormat === 'gif' || targetFormat === 'webp') && animatedPaths.length) {
@@ -1313,12 +1506,15 @@ function EditorCanvas({ diagram }) {
                         selectedNodeId={selectedNodeId} onSelectNode={(id) => { setSelectedNodeId(id); setSelectedEdgeId(null); }}
                         onMoveLayer={moveLayer} onReorderLayer={reorderLayer}
                     />
-                    <main className="canvas-shell" ref={wrapperRef}>
+                    <main className={`canvas-shell ${canvasExpanded ? 'is-expanded' : ''}`} ref={wrapperRef}>
                         <PageControls
                             page={activePage} elementCount={nodes.length} onResize={resizePage}
                             onAddImage={uploadAsset} onImportBackground={uploadPageBackground} importing={uploading}
                             onBackgroundFit={(backgroundFit) => updatePageBackground({ backgroundFit })}
                             onRemoveBackground={() => updatePageBackground({ backgroundImage: null, backgroundName: null, backgroundType: null })}
+                            onPaperStyle={(paperStyle) => updatePageBackground({ paperStyle })}
+                            onTopBox={(showTopBox) => updatePageBackground({ showTopBox })}
+                            expanded={canvasExpanded} onToggleExpanded={toggleCanvasExpanded}
                         />
                         <ArtboardFrame page={activePage}><ReactFlow
                             key={activePage.id}
@@ -1331,11 +1527,16 @@ function EditorCanvas({ diagram }) {
                             onNodeClick={(_, node) => { setSelectedNodeId(node.id); setSelectedEdgeId(null); }}
                             onEdgeClick={(_, item) => { setSelectedEdgeId(item.id); setSelectedNodeId(null); }}
                             onPaneClick={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }}
+                            onInit={(instance) => {
+                                const viewport = pageViewports.current.get(activePage.id);
+                                if (viewport) requestAnimationFrame(() => restorePageViewport(activePage, viewport, instance));
+                            }}
+                            onMoveEnd={(_, viewport) => rememberPageViewport(activePage, viewport)}
                             onDrop={onDrop} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
                             connectionMode={ConnectionMode.Loose} connectionLineStyle={{ stroke: '#6d5dfc', strokeWidth: 2.5, strokeDasharray: '8 7' }}
-                            minZoom={0.25} maxZoom={2.5} fitView fitViewOptions={{ padding: 0.24, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }} elevateNodesOnSelect={false}
+                            minZoom={0.25} maxZoom={2.5} fitView={!pageViewports.current.has(activePage.id)} fitViewOptions={{ padding: 0.24, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }} elevateNodesOnSelect={false}
                         >
-                            <Background color="#d8d8dd" gap={22} size={1.1} /><Controls position="bottom-left" showInteractive={false} />
+                            {(activePage.paperStyle || 'plain') === 'plain' && <Background color="#d8d8dd" gap={22} size={1.1} />}<Controls position="bottom-left" showInteractive={false} />
                             <MiniMap position="bottom-right" pannable zoomable nodeColor={(node) => node.data.color.value} maskColor="rgba(247,247,248,.78)" />
                             <Panel position="top-center" className="canvas-toolbar">
                                 <ToolButton icon={MousePointer2} label="Select" active /><ToolButton icon={Type} label="Add rich text" onClick={() => addNodeFromSidebar('text', { label: 'Start typing' })} />

@@ -107,6 +107,12 @@ class DiagramService
             'pages.*.backgroundName' => ['nullable', 'string', 'max:160'],
             'pages.*.backgroundType' => ['nullable', 'string', 'max:12'],
             'pages.*.backgroundFit' => ['nullable', 'in:cover,contain,fill'],
+            'pages.*.paperStyle' => ['nullable', 'in:plain,narrow-lines,wide-lines,four-lines,boxes,graph-dots'],
+            'pages.*.showTopBox' => ['nullable', 'boolean'],
+            'pages.*.viewport' => ['nullable', 'array:x,y,zoom'],
+            'pages.*.viewport.x' => ['required_with:pages.*.viewport', 'numeric'],
+            'pages.*.viewport.y' => ['required_with:pages.*.viewport', 'numeric'],
+            'pages.*.viewport.zoom' => ['required_with:pages.*.viewport', 'numeric', 'min:0.01', 'max:10'],
         ];
     }
 }
