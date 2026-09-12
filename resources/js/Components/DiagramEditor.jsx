@@ -726,6 +726,7 @@ function buildTemplatePage(template, pageNumber = 1) {
             backgroundColor: node.backgroundColor || null,
             textColor: node.textColor || null,
             showShadow: node.showShadow ?? null,
+            opacity: node.opacity ?? 1,
             isGuide: Boolean(node.guide),
             disableHandles: Boolean(template.disableConnectors || node.disableHandles),
         },
@@ -808,6 +809,7 @@ function WorkflowNode({ id, data, selected, width, height }) {
     const showShadow = data.showShadow ?? (!isPageImage && data.shape !== 'text');
     const backgroundColor = data.backgroundColor || (isPageImage || data.shape === 'text' ? 'transparent' : '#ffffff');
     const showHandles = !data.disableHandles && !data.isGuide;
+    const opacity = Math.max(0, Math.min(1, Number(data.opacity ?? 1)));
 
     useEffect(() => { const value = data.richText || data.label; setDraft(value); draftRef.current = value; }, [data.label, data.richText]);
     const finishEditing = () => {
@@ -819,7 +821,7 @@ function WorkflowNode({ id, data, selected, width, height }) {
     return (
         <div
             className={`workflow-node workflow-node--${data.shape} ${data.isGuide ? 'is-guide' : ''} ${data.hideBorder ? 'has-hidden-border' : ''} ${showShadow ? 'has-shadow' : ''} ${selected ? 'is-selected' : ''}`}
-            style={{ '--node-color': data.color.value, '--node-soft': data.color.soft, backgroundColor, width: width || undefined, height: height || undefined, fontFamily: fontStack(data.fontFamily) }}
+            style={{ '--node-color': data.color.value, '--node-soft': data.color.soft, backgroundColor, width: width || undefined, height: height || undefined, fontFamily: fontStack(data.fontFamily), opacity }}
             onDoubleClick={(event) => { if (!isPageImage) { event.stopPropagation(); setEditing(true); } }}
         >
             <NodeResizer
@@ -1056,6 +1058,7 @@ function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdg
     if (!selectedNode && !selectedEdge) return null;
     const isImage = selectedNode && (selectedNode.data.kind === 'image' || selectedNode.data.shape === 'image');
     const showShadow = selectedNode && (selectedNode.data.showShadow ?? (!isImage && selectedNode.data.shape !== 'text'));
+    const nodeOpacity = Math.round(Math.max(0, Math.min(1, Number(selectedNode?.data.opacity ?? 1))) * 100);
     return (
         <aside className="properties-panel">
             <div className="properties-title">
@@ -1141,6 +1144,10 @@ function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdg
                     <button type="button" role="switch" aria-checked={Boolean(selectedEdge.data?.animated)} className={selectedEdge.data?.animated ? 'is-on' : ''} onClick={() => onUpdateEdge(selectedEdge.id, { animated: !selectedEdge.data?.animated, ...(!selectedEdge.data?.animated && selectedEdge.data?.lineStyle === 'solid' ? { lineStyle: 'dashed' } : {}) })}><i /></button>
                 </div>
             </>}
+            {selectedNode && <div className="opacity-control">
+                <label htmlFor="node-opacity"><span>Opacity</span><strong>{nodeOpacity}%</strong></label>
+                <input id="node-opacity" type="range" min="0" max="100" step="1" value={nodeOpacity} onChange={(event) => onUpdateNode(selectedNode.id, { opacity: Number(event.target.value) / 100 })} />
+            </div>}
             {selectedNode && <LayerControls node={selectedNode} onMoveLayer={onMoveLayer} />}
             <button type="button" className="delete-button" onClick={onDelete}><Trash2 size={16} /> Delete {selectedNode ? 'shape' : 'connector'}</button>
         </aside>
@@ -1571,6 +1578,7 @@ function EditorCanvas({ diagram, restoreDraft }) {
                 hideBorder: Boolean(overrides.hideBorder), backgroundColor: overrides.backgroundColor || null,
                 showShadow: overrides.showShadow ?? null,
                 fontFamily: overrides.fontFamily || 'DM Sans Variable',
+                opacity: overrides.opacity ?? 1,
                 color: COLORS[items.length % COLORS.length],
             },
         }]);
