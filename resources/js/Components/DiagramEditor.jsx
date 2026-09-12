@@ -26,6 +26,10 @@ import '@fontsource-variable/nunito/wght.css';
 import '@fontsource-variable/nunito/wght-italic.css';
 import '@fontsource/great-vibes/400.css';
 import '@fontsource-variable/dancing-script/wght.css';
+import '@fontsource/cabin-sketch/400.css';
+import '@fontsource/cabin-sketch/700.css';
+import '@fontsource/henny-penny/400.css';
+import '@fontsource/finger-paint/400.css';
 import '@fontsource/oxygen/400.css';
 import '@fontsource/oxygen/700.css';
 import '@fontsource-variable/cinzel/wght.css';
@@ -43,9 +47,10 @@ import '@fontsource/noto-naskh-arabic/700.css';
 import '@fontsource-variable/arimo/wght.css';
 import '@fontsource-variable/arimo/wght-italic.css';
 import {
-    AlignCenter, AlignLeft, AlignRight, AppWindow, ArrowDown, ArrowLeft, ArrowUp, Bold, Box,
-    Braces, BringToFront, Check, ChevronDown, Circle as CircleIcon, Cloud, Code2, Copy,
-    Database, Diamond, Download, FileText, GitBranch, Grid2X2, GripVertical,
+    AlignCenter, AlignHorizontalJustifyCenter, AlignHorizontalJustifyEnd, AlignHorizontalJustifyStart,
+    AlignLeft, AlignRight, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, AlignVerticalJustifyStart,
+    AppWindow, ArrowDown, ArrowLeft, ArrowUp, Bold, Box, Braces, BringToFront, Check, ChevronDown, Circle as CircleIcon, Cloud, Code2, Copy,
+    Database, Diamond, Download, Eye, EyeOff, FileText, GitBranch, Grid2X2,
     Image as ImageIcon, Italic, Layers3, List, ListOrdered, LogOut, Maximize2, Menu,
     Minimize2, Network, PanelBottom, PanelTop, Play, Plus, Redo2, Ruler, Save, SendToBack, Server,
     Settings, Shapes, Sparkles, Square, Trash2, Type, Underline, Undo2, Upload, Users, X, Zap,
@@ -101,6 +106,9 @@ const FONT_FAMILIES = [
     { label: 'Source Code Pro', value: 'Source Code Pro Variable', stack: "'Source Code Pro Variable', monospace" },
     { label: 'Great Vibes', value: 'Great Vibes', stack: "'Great Vibes', cursive" },
     { label: 'Dancing Script', value: 'Dancing Script Variable', stack: "'Dancing Script Variable', cursive" },
+    { label: 'Cabin Sketch', value: 'Cabin Sketch', stack: "'Cabin Sketch', cursive" },
+    { label: 'Henny Penny', value: 'Henny Penny', stack: "'Henny Penny', cursive" },
+    { label: 'Finger Paint', value: 'Finger Paint', stack: "'Finger Paint', cursive" },
     { label: 'Cinzel', value: 'Cinzel Variable', stack: "'Cinzel Variable', serif" },
     { label: 'Marcellus', value: 'Marcellus', stack: "'Marcellus', serif" },
     { label: 'Tajawal', value: 'Tajawal', stack: "'Tajawal', sans-serif" },
@@ -116,10 +124,16 @@ function fontStack(fontFamily = 'DM Sans Variable') {
     return FONT_FAMILIES.find((font) => font.value === legacyFamily)?.stack || FONT_FAMILIES[0].stack;
 }
 
+function sameStringArray(first = [], second = []) {
+    return first.length === second.length && first.every((value, index) => value === second[index]);
+}
+
 const DEFAULT_PAGE_SIZE = { width: 1200, height: 760 };
 const PRINT_UNITS_PER_INCH = 100;
 const PDF_RASTER_SCALE = 3;
 const FLATTEN_PDF_EXPORT = true;
+const MAX_UPLOAD_SIZE_MB = 30;
+const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 const PAGE_SIZES = {
     'Diagram': { width: 1200, height: 760 },
     'Presentation': { width: 1200, height: 675 },
@@ -414,6 +428,64 @@ function applyLayerIndexes(nodes = []) {
 function normalizeLayerNodes(nodes = []) {
     return applyLayerIndexes([...nodes]
         .sort((first, second) => (Number(first.zIndex) || 0) - (Number(second.zIndex) || 0)));
+}
+
+function serializableValue(value) {
+    return JSON.parse(JSON.stringify(value ?? null));
+}
+
+function serializableNumber(value, fallback = 0) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+}
+
+function serializeNode(node = {}) {
+    return serializableValue({
+        id: node.id,
+        type: node.type || 'workflow',
+        position: {
+            x: serializableNumber(node.position?.x),
+            y: serializableNumber(node.position?.y),
+        },
+        ...(node.width ? { width: node.width } : {}),
+        ...(node.height ? { height: node.height } : {}),
+        ...(node.style ? { style: node.style } : {}),
+        ...(node.zIndex ? { zIndex: node.zIndex } : {}),
+        ...(node.hidden ? { hidden: true } : {}),
+        data: node.data || {},
+    });
+}
+
+function serializeEdge(edge = {}) {
+    return serializableValue({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        type: edge.type || 'workflowEdge',
+        ...(edge.sourceHandle ? { sourceHandle: edge.sourceHandle } : {}),
+        ...(edge.targetHandle ? { targetHandle: edge.targetHandle } : {}),
+        ...(edge.markerEnd ? { markerEnd: edge.markerEnd } : {}),
+        data: edge.data || {},
+    });
+}
+
+function serializePage(page = {}) {
+    return serializableValue({
+        id: page.id,
+        name: page.name || 'Page',
+        width: serializableNumber(page.width, DEFAULT_PAGE_SIZE.width),
+        height: serializableNumber(page.height, DEFAULT_PAGE_SIZE.height),
+        nodes: Array.isArray(page.nodes) ? page.nodes.map(serializeNode) : [],
+        edges: Array.isArray(page.edges) ? page.edges.map(serializeEdge) : [],
+        ...(page.backgroundImage ? { backgroundImage: page.backgroundImage } : {}),
+        ...(page.backgroundName ? { backgroundName: page.backgroundName } : {}),
+        ...(page.backgroundType ? { backgroundType: page.backgroundType } : {}),
+        ...(page.backgroundFit ? { backgroundFit: page.backgroundFit } : {}),
+        paperStyle: page.paperStyle || 'plain',
+        showTopBox: Boolean(page.showTopBox),
+        printGuides: page.printGuides || null,
+        ...(page.viewport ? { viewport: page.viewport } : {}),
+    });
 }
 
 function loadPages(diagram) {
@@ -874,7 +946,7 @@ function ToolButton({ icon: Icon, label, onClick, active, disabled }) {
     );
 }
 
-function LayerList({ nodes, selectedNodeId, onSelectNode, onMoveLayer, onReorderLayer }) {
+function LayerList({ nodes, selectedNodeIds, onSelectNode, onMoveLayer, onReorderLayer, onDeleteNode, onToggleNodeVisibility }) {
     const frontToBack = [...nodes].reverse();
 
     return <div className="layers-view">
@@ -882,20 +954,30 @@ function LayerList({ nodes, selectedNodeId, onSelectNode, onMoveLayer, onReorder
         {frontToBack.length ? <div className="layer-list">
             {frontToBack.map((node, index) => {
                 const isImage = node.data.kind === 'image' || node.data.shape === 'image';
+                const isHidden = Boolean(node.hidden);
                 const label = plainText(node.data.richText || node.data.label || '').trim() || (isImage ? 'Image' : 'Untitled layer');
+                const VisibilityIcon = isHidden ? EyeOff : Eye;
                 return <div
-                    key={node.id} draggable className={`layer-row ${selectedNodeId === node.id ? 'is-selected' : ''}`}
+                    key={node.id} draggable className={`layer-row ${selectedNodeIds.includes(node.id) ? 'is-selected' : ''} ${isHidden ? 'is-hidden' : ''}`} title={label}
                     onDragStart={(event) => { event.dataTransfer.setData('application/workflow-layer', node.id); event.dataTransfer.effectAllowed = 'move'; }}
                     onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
                     onDrop={(event) => { event.preventDefault(); const sourceId = event.dataTransfer.getData('application/workflow-layer'); if (sourceId) onReorderLayer(sourceId, node.id); }}
                     onClick={() => onSelectNode(node.id)}
                 >
-                    <GripVertical size={13} className="layer-grip" />
+                    <button
+                        type="button"
+                        className="layer-visibility-button"
+                        title={isHidden ? 'Show layer' : 'Hide layer'}
+                        aria-label={isHidden ? `Show ${label}` : `Hide ${label}`}
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => { event.stopPropagation(); onToggleNodeVisibility(node.id); }}
+                    ><VisibilityIcon size={13} /></button>
                     <span className="layer-thumbnail">{isImage && node.data.imageUrl ? <img src={node.data.imageUrl} alt="" /> : node.data.shape === 'text' ? <Type size={14} /> : <Shapes size={14} />}</span>
-                    <span className="layer-name"><strong>{label}</strong><small>{isImage ? 'Image' : node.data.shape || 'Shape'}</small></span>
+                    <span className="layer-name" title={label}><strong>{label}</strong><small>{isHidden ? 'Hidden ' : ''}{isImage ? 'Image' : node.data.shape || 'Shape'}</small></span>
                     <span className="layer-row-actions">
                         <button type="button" disabled={index === 0} title="Move forward" onClick={(event) => { event.stopPropagation(); onMoveLayer(node.id, 'forward'); }}><ArrowUp size={12} /></button>
                         <button type="button" disabled={index === frontToBack.length - 1} title="Move backward" onClick={(event) => { event.stopPropagation(); onMoveLayer(node.id, 'backward'); }}><ArrowDown size={12} /></button>
+                        <button type="button" className="layer-delete-button" title="Delete layer" onClick={(event) => { event.stopPropagation(); onDeleteNode(node.id); }}><Trash2 size={12} /></button>
                     </span>
                 </div>;
             })}
@@ -917,7 +999,7 @@ function SidebarAccordion({ id, title, count, open, onToggle, children }) {
     );
 }
 
-function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed, nodes, selectedNodeId, onSelectNode, onMoveLayer, onReorderLayer, onApplyTemplate }) {
+function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed, nodes, selectedNodeIds, onSelectNode, onMoveLayer, onReorderLayer, onDeleteNode, onToggleNodeVisibility, onApplyTemplate }) {
     const [view, setView] = useState('elements');
     const [openAccordions, setOpenAccordions] = useState({ shapes: true, templates: true, kdp: true, media: true });
     const toggleAccordion = (id) => setOpenAccordions((items) => ({ ...items, [id]: !items[id] }));
@@ -990,7 +1072,7 @@ function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed, node
                     <span className="quick-node__icon coral"><Database size={17} /></span><span><strong>Data store</strong><small>Database or cache</small></span><Plus size={15} />
                 </button>
                 <div className="sidebar-tip"><Sparkles size={16} /><p><strong>Pro tip</strong><br />Double-click text to edit it. Use the style panel for lists, emphasis and alignment.</p></div>
-                </> : <LayerList nodes={nodes} selectedNodeId={selectedNodeId} onSelectNode={onSelectNode} onMoveLayer={onMoveLayer} onReorderLayer={onReorderLayer} />}
+                </> : <LayerList nodes={nodes} selectedNodeIds={selectedNodeIds} onSelectNode={onSelectNode} onMoveLayer={onMoveLayer} onReorderLayer={onReorderLayer} onDeleteNode={onDeleteNode} onToggleNodeVisibility={onToggleNodeVisibility} />}
             </>}
         </aside>
     );
@@ -1054,7 +1136,27 @@ function LayerControls({ node, onMoveLayer }) {
     </div>;
 }
 
-function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdge, onUpload, uploading, onMoveLayer, onDelete, onClose }) {
+function AlignControls({ selectedNodes, onAlignNodes }) {
+    if (selectedNodes.length < 2) return null;
+    const buttons = [
+        ['left', AlignHorizontalJustifyStart, 'Align left'],
+        ['center', AlignHorizontalJustifyCenter, 'Align center'],
+        ['right', AlignHorizontalJustifyEnd, 'Align right'],
+        ['top', AlignVerticalJustifyStart, 'Align top'],
+        ['middle', AlignVerticalJustifyCenter, 'Align middle'],
+        ['bottom', AlignVerticalJustifyEnd, 'Align bottom'],
+    ];
+    return <div className="align-controls">
+        <span className="field-label">Align {selectedNodes.length} selected</span>
+        <div>
+            {buttons.map(([mode, Icon, label]) => (
+                <button key={mode} type="button" title={label} onClick={() => onAlignNodes(mode)}><Icon size={15} /><span>{label.replace('Align ', '')}</span></button>
+            ))}
+        </div>
+    </div>;
+}
+
+function PropertiesPanel({ selectedNode, selectedNodes = [], selectedEdge, onUpdateNode, onUpdateEdge, onUpload, uploading, onMoveLayer, onAlignNodes, onDelete, onClose }) {
     if (!selectedNode && !selectedEdge) return null;
     const isImage = selectedNode && (selectedNode.data.kind === 'image' || selectedNode.data.shape === 'image');
     const showShadow = selectedNode && (selectedNode.data.showShadow ?? (!isImage && selectedNode.data.shape !== 'text'));
@@ -1144,6 +1246,7 @@ function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdg
                     <button type="button" role="switch" aria-checked={Boolean(selectedEdge.data?.animated)} className={selectedEdge.data?.animated ? 'is-on' : ''} onClick={() => onUpdateEdge(selectedEdge.id, { animated: !selectedEdge.data?.animated, ...(!selectedEdge.data?.animated && selectedEdge.data?.lineStyle === 'solid' ? { lineStyle: 'dashed' } : {}) })}><i /></button>
                 </div>
             </>}
+            <AlignControls selectedNodes={selectedNodes} onAlignNodes={onAlignNodes} />
             {selectedNode && <div className="opacity-control">
                 <label htmlFor="node-opacity"><span>Opacity</span><strong>{nodeOpacity}%</strong></label>
                 <input id="node-opacity" type="range" min="0" max="100" step="1" value={nodeOpacity} onChange={(event) => onUpdateNode(selectedNode.id, { opacity: Number(event.target.value) / 100 })} />
@@ -1410,14 +1513,27 @@ function PrintRulers({ page, scale, onChange }) {
 
 function ArtboardFrame({ page, onPrintGuidesChange, children }) {
     const workspaceRef = useRef(null);
+    const resizeFrame = useRef(null);
     const [workspaceSize, setWorkspaceSize] = useState({ width: 1200, height: 760 });
     useEffect(() => {
         const element = workspaceRef.current;
         if (!element) return undefined;
-        const resize = () => setWorkspaceSize({ width: element.clientWidth, height: element.clientHeight });
+        const resize = () => {
+            if (resizeFrame.current) cancelAnimationFrame(resizeFrame.current);
+            resizeFrame.current = requestAnimationFrame(() => {
+                resizeFrame.current = null;
+                setWorkspaceSize((current) => {
+                    const next = { width: element.clientWidth, height: element.clientHeight };
+                    return current.width === next.width && current.height === next.height ? current : next;
+                });
+            });
+        };
         resize();
         const observer = new ResizeObserver(resize); observer.observe(element);
-        return () => observer.disconnect();
+        return () => {
+            observer.disconnect();
+            if (resizeFrame.current) cancelAnimationFrame(resizeFrame.current);
+        };
     }, []);
     const scale = Math.max(0.1, Math.min(1, (workspaceSize.width - 64) / page.width, (workspaceSize.height - 62) / page.height));
     return (
@@ -1447,6 +1563,7 @@ function EditorCanvas({ diagram, restoreDraft }) {
     const [pages, setPages] = useState(initialPages);
     const [activePageId, setActivePageId] = useState(initialPages[0].id);
     const [selectedNodeId, setSelectedNodeId] = useState(null);
+    const [selectedNodeIds, setSelectedNodeIds] = useState([]);
     const [selectedEdgeId, setSelectedEdgeId] = useState(null);
     const [history, setHistory] = useState([]);
     const [future, setFuture] = useState([]);
@@ -1466,6 +1583,10 @@ function EditorCanvas({ diagram, restoreDraft }) {
     const nodes = activePage?.nodes || [];
     const edges = activePage?.edges || [];
     const activePageIsPrintCanvas = Boolean(activePage?.printGuides?.enabled);
+    const hiddenNodeIds = useMemo(() => new Set(nodes.filter((node) => node.hidden).map((node) => node.id)), [nodes]);
+    const canvasEdges = useMemo(() => edges.map((edge) => hiddenNodeIds.has(edge.source) || hiddenNodeIds.has(edge.target)
+        ? { ...edge, hidden: true, selected: false }
+        : edge), [edges, hiddenNodeIds]);
 
     const rememberPageViewport = useCallback((page, viewport) => {
         const flowElement = wrapperRef.current?.querySelector('.react-flow');
@@ -1550,6 +1671,7 @@ function EditorCanvas({ diagram, restoreDraft }) {
 
     const nodeTypes = useMemo(() => ({ workflow: MemoWorkflowNode }), []);
     const edgeTypes = useMemo(() => ({ workflowEdge: MemoWorkflowEdge }), []);
+    const selectedNodes = nodes.filter((node) => selectedNodeIds.includes(node.id));
     const selectedNode = nodes.find((node) => node.id === selectedNodeId);
     const selectedEdge = edges.find((item) => item.id === selectedEdgeId);
     const snapshot = useCallback(() => ({ pages, activePageId }), [pages, activePageId]);
@@ -1563,6 +1685,32 @@ function EditorCanvas({ diagram, restoreDraft }) {
         remember();
         setEdges((items) => items.map((item) => item.id === id ? { ...item, data: { ...item.data, ...patch }, markerEnd: { ...item.markerEnd, color: patch.color || item.data.color } } : item));
     }, [remember]);
+    const selectNodes = useCallback((ids = []) => {
+        const uniqueIds = [...new Set(ids)].filter(Boolean);
+        const selectedSet = new Set(uniqueIds);
+        setSelectedNodeIds((current) => sameStringArray(current, uniqueIds) ? current : uniqueIds);
+        setSelectedNodeId((current) => current === (uniqueIds.at(-1) || null) ? current : uniqueIds.at(-1) || null);
+        setSelectedEdgeId((current) => current === null ? current : null);
+        setNodes((items) => {
+            let changed = false;
+            const next = items.map((node) => {
+                const selected = selectedSet.has(node.id);
+                if (Boolean(node.selected) === selected) return node;
+                changed = true;
+                return { ...node, selected };
+            });
+            return changed ? next : items;
+        });
+        setEdges((items) => {
+            let changed = false;
+            const next = items.map((edge) => {
+                if (!edge.selected) return edge;
+                changed = true;
+                return { ...edge, selected: false };
+            });
+            return changed ? next : items;
+        });
+    }, [setNodes, setEdges]);
 
     const addNodeAt = useCallback((shape, position, overrides = {}) => {
         remember();
@@ -1582,8 +1730,8 @@ function EditorCanvas({ diagram, restoreDraft }) {
                 color: COLORS[items.length % COLORS.length],
             },
         }]);
-        setSelectedNodeId(id); setSelectedEdgeId(null);
-    }, [remember]);
+        selectNodes([id]);
+    }, [remember, selectNodes]);
 
     const addNodeFromSidebar = (shape, overrides = {}) => {
         const artboard = wrapperRef.current?.querySelector('.artboard-frame')?.getBoundingClientRect();
@@ -1602,15 +1750,42 @@ function EditorCanvas({ diagram, restoreDraft }) {
         remember();
         setEdges((items) => addEdge({ ...connection, id: `edge-${Date.now()}`, type: 'workflowEdge', data: { color: '#6d5dfc', lineStyle: 'dashed' }, markerEnd: { type: MarkerType.ArrowClosed, color: '#6d5dfc', width: 18, height: 18 } }, items));
     }, [remember]);
-    const deleteSelection = useCallback(() => {
-        if (!selectedNodeId && !selectedEdgeId) return;
+    const deleteNodesByIds = useCallback((ids) => {
+        const removeIds = [...new Set(ids)].filter(Boolean);
+        if (!removeIds.length) return;
         remember();
-        if (selectedNodeId) {
-            setNodes((items) => items.filter((node) => node.id !== selectedNodeId));
-            setEdges((items) => items.filter((item) => item.source !== selectedNodeId && item.target !== selectedNodeId));
+        const removeSet = new Set(removeIds);
+        setNodes((items) => items.filter((node) => !removeSet.has(node.id)));
+        setEdges((items) => items.filter((item) => !removeSet.has(item.source) && !removeSet.has(item.target)));
+        setSelectedNodeIds((ids) => ids.filter((id) => !removeSet.has(id)));
+        setSelectedNodeId((id) => removeSet.has(id) ? null : id);
+        setSelectedEdgeId(null);
+    }, [remember, setNodes, setEdges]);
+    const toggleNodeVisibility = useCallback((id) => {
+        const target = nodes.find((node) => node.id === id);
+        if (!target) return;
+        const willHide = !target.hidden;
+        remember();
+        setNodes((items) => items.map((node) => node.id === id ? { ...node, hidden: willHide, selected: willHide ? false : node.selected } : node));
+        if (willHide) {
+            setSelectedNodeIds((items) => items.filter((item) => item !== id));
+            setSelectedNodeId((current) => current === id ? null : current);
+            setSelectedEdgeId(null);
+        }
+    }, [nodes, remember, setNodes]);
+    const deleteSelection = useCallback(() => {
+        if (!selectedNodeIds.length && !selectedNodeId && !selectedEdgeId) return;
+        remember();
+        const idsToDelete = selectedNodeIds.length ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
+        if (idsToDelete.length) {
+            const removeSet = new Set(idsToDelete);
+            setNodes((items) => items.filter((node) => !removeSet.has(node.id)));
+            setEdges((items) => items.filter((item) => !removeSet.has(item.source) && !removeSet.has(item.target)));
+            setSelectedNodeIds([]);
             setSelectedNodeId(null);
+            setSelectedEdgeId(null);
         } else { setEdges((items) => items.filter((item) => item.id !== selectedEdgeId)); setSelectedEdgeId(null); }
-    }, [selectedNodeId, selectedEdgeId, remember]);
+    }, [selectedNodeIds, selectedNodeId, selectedEdgeId, remember]);
     const undo = useCallback(() => {
         if (!history.length) return;
         const previous = history[history.length - 1];
@@ -1635,13 +1810,13 @@ function EditorCanvas({ diagram, restoreDraft }) {
     const selectPage = useCallback((id) => {
         rememberPageViewport(activePage, flow.getViewport());
         setActivePageId(id);
-        setSelectedNodeId(null); setSelectedEdgeId(null);
+        setSelectedNodeIds([]); setSelectedNodeId(null); setSelectedEdgeId(null);
     }, [activePage, flow, rememberPageViewport]);
     const addPage = useCallback(() => {
         remember();
         const page = createPage(pages.length + 1);
         setPages((items) => [...items, page]);
-        setActivePageId(page.id); setSelectedNodeId(null); setSelectedEdgeId(null);
+        setActivePageId(page.id); setSelectedNodeIds([]); setSelectedNodeId(null); setSelectedEdgeId(null);
     }, [pages.length, remember]);
     const applyTemplate = useCallback((template) => {
         const hasContent = nodes.length > 0 || edges.length > 0;
@@ -1652,7 +1827,7 @@ function EditorCanvas({ diagram, restoreDraft }) {
         pageViewports.current.delete(activePageId);
         if (template.printGuides?.enabled) pageViewports.current.set(activePageId, { x: 0, y: 0, zoom: 1 });
         setPages((items) => items.map((page) => page.id === activePageId ? { ...templatePage, id: page.id } : page));
-        setSelectedNodeId(null); setSelectedEdgeId(null);
+        setSelectedNodeIds([]); setSelectedNodeId(null); setSelectedEdgeId(null);
         if (!diagram || ['Website architecture', 'Untitled workflow'].includes(title)) {
             setTitle(template.title);
             setFilename(slugify(template.title));
@@ -1679,7 +1854,7 @@ function EditorCanvas({ diagram, restoreDraft }) {
         });
         if (viewport) pageViewports.current.set(page.id, viewport);
         setPages((items) => [...items, page]); setActivePageId(page.id);
-        setSelectedNodeId(null); setSelectedEdgeId(null);
+        setSelectedNodeIds([]); setSelectedNodeId(null); setSelectedEdgeId(null);
     }, [activePage, pages.length, remember]);
     const renamePage = useCallback((id, name) => {
         remember(); setPages((items) => items.map((page) => page.id === id ? { ...page, name } : page));
@@ -1691,7 +1866,7 @@ function EditorCanvas({ diagram, restoreDraft }) {
         remember();
         const nextPages = pages.filter((page) => page.id !== activePageId);
         setPages(nextPages); setActivePageId(nextPages[Math.max(0, index - 1)].id);
-        setSelectedNodeId(null); setSelectedEdgeId(null);
+        setSelectedNodeIds([]); setSelectedNodeId(null); setSelectedEdgeId(null);
     }, [pages, activePageId, activePage, remember]);
     const resizePage = useCallback((size) => {
         remember();
@@ -1754,6 +1929,43 @@ function EditorCanvas({ diagram, restoreDraft }) {
             return applyLayerIndexes(ordered);
         });
     }, [remember, setNodes]);
+    const alignSelectedNodes = useCallback((mode) => {
+        if (selectedNodeIds.length < 2) return;
+        remember();
+        const selectedSet = new Set(selectedNodeIds);
+        const sizeOf = (node) => ({
+            width: Number(node.measured?.width) || Number(node.width) || Number(node.style?.width) || (node.data?.shape === 'circle' ? 112 : node.data?.shape === 'diamond' ? 130 : node.data?.shape === 'text' ? 230 : 160),
+            height: Number(node.measured?.height) || Number(node.height) || Number(node.style?.height) || (node.data?.shape === 'circle' ? 112 : node.data?.shape === 'diamond' ? 130 : node.data?.shape === 'text' ? 48 : 78),
+        });
+        setNodes((items) => {
+            const selectedItems = items.filter((node) => selectedSet.has(node.id));
+            if (selectedItems.length < 2) return items;
+            const boxes = selectedItems.map((node) => {
+                const size = sizeOf(node);
+                return { node, width: size.width, height: size.height, left: node.position.x, top: node.position.y, right: node.position.x + size.width, bottom: node.position.y + size.height };
+            });
+            const bounds = {
+                left: Math.min(...boxes.map((box) => box.left)),
+                right: Math.max(...boxes.map((box) => box.right)),
+                top: Math.min(...boxes.map((box) => box.top)),
+                bottom: Math.max(...boxes.map((box) => box.bottom)),
+            };
+            const centerX = bounds.left + (bounds.right - bounds.left) / 2;
+            const centerY = bounds.top + (bounds.bottom - bounds.top) / 2;
+            return items.map((node) => {
+                if (!selectedSet.has(node.id)) return node;
+                const { width, height } = sizeOf(node);
+                const position = { ...node.position };
+                if (mode === 'left') position.x = bounds.left;
+                if (mode === 'center') position.x = centerX - width / 2;
+                if (mode === 'right') position.x = bounds.right - width;
+                if (mode === 'top') position.y = bounds.top;
+                if (mode === 'middle') position.y = centerY - height / 2;
+                if (mode === 'bottom') position.y = bounds.bottom - height;
+                return { ...node, position, selected: true };
+            });
+        });
+    }, [selectedNodeIds, remember, setNodes]);
 
     useEffect(() => {
         const onKeyDown = (event) => {
@@ -1776,7 +1988,7 @@ function EditorCanvas({ diagram, restoreDraft }) {
 
     const uploadAsset = async (file, targetNodeId = null) => {
         if (!file) return;
-        if (file.size > 5 * 1024 * 1024) { window.alert('Please choose a file smaller than 5 MB.'); return; }
+        if (file.size > MAX_UPLOAD_SIZE_BYTES) { window.alert(`Please choose a file smaller than ${MAX_UPLOAD_SIZE_MB} MB.`); return; }
         setUploading(true);
         try {
             const form = new FormData();
@@ -1807,7 +2019,7 @@ function EditorCanvas({ diagram, restoreDraft }) {
     };
     const uploadPageBackground = async (file) => {
         if (!file) return;
-        if (file.size > 5 * 1024 * 1024) { window.alert('Please choose a file smaller than 5 MB.'); return; }
+        if (file.size > MAX_UPLOAD_SIZE_BYTES) { window.alert(`Please choose a file smaller than ${MAX_UPLOAD_SIZE_MB} MB.`); return; }
         setUploading(true);
         try {
             const form = new FormData(); form.append('asset', file);
@@ -1828,10 +2040,11 @@ function EditorCanvas({ diagram, restoreDraft }) {
             rememberPageViewport(activePage, flow.getViewport());
             const savedPages = pages.map((page) => {
                 const viewport = pageViewports.current.get(page.id);
-                return viewport ? { ...page, viewport } : page;
+                return serializePage(viewport ? { ...page, viewport } : page);
             });
+            const activeSavedPage = savedPages.find((page) => page.id === activePageId) || savedPages[0] || serializePage(activePage);
             const cleanFilename = filename.trim() || title.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'workflow';
-            const input = { title: title.trim() || 'Untitled workflow', filename: cleanFilename, nodes, edges, pages: savedPages };
+            const input = { title: title.trim() || 'Untitled workflow', filename: cleanFilename, nodes: activeSavedPage.nodes, edges: activeSavedPage.edges, pages: savedPages };
             const operation = diagram
                 ? `mutation UpdateDiagram($id: ID!, $input: DiagramInput!) { updateDiagram(id: $id, input: $input) { id } }`
                 : `mutation CreateDiagram($input: DiagramInput!) { createDiagram(input: $input) { id } }`;
@@ -2160,21 +2373,49 @@ function EditorCanvas({ diagram, restoreDraft }) {
                     <Sidebar
                         onAddNode={addNodeFromSidebar} onUpload={uploadAsset} uploading={uploading}
                         collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} nodes={nodes}
-                        selectedNodeId={selectedNodeId} onSelectNode={(id) => { setSelectedNodeId(id); setSelectedEdgeId(null); }}
-                        onMoveLayer={moveLayer} onReorderLayer={reorderLayer} onApplyTemplate={applyTemplate}
+                        selectedNodeIds={selectedNodeIds} onSelectNode={(id) => selectNodes([id])}
+                        onMoveLayer={moveLayer} onReorderLayer={reorderLayer} onDeleteNode={(id) => deleteNodesByIds([id])}
+                        onToggleNodeVisibility={toggleNodeVisibility} onApplyTemplate={applyTemplate}
                     />
                     <main className={`canvas-shell ${canvasExpanded ? 'is-expanded' : ''}`} ref={wrapperRef}>
                         <ArtboardFrame page={activePage} onPrintGuidesChange={updatePagePrintGuides}><ReactFlow
                             key={activePage.id}
-                            nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+                            nodes={nodes} edges={canvasEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
                             onNodesChange={(changes) => setNodes((items) => applyNodeChanges(changes, items))}
                             onEdgesChange={(changes) => setEdges((items) => applyEdgeChanges(changes, items))}
                             onNodeDragStart={() => { dragStart.current = snapshot(); }}
                             onNodeDragStop={() => { if (dragStart.current) { setHistory((items) => [...items.slice(-39), dragStart.current]); setFuture([]); setSaved(false); dragStart.current = null; } }}
                             onConnect={onConnect}
-                            onNodeClick={(_, node) => { setSelectedNodeId(node.id); setSelectedEdgeId(null); }}
-                            onEdgeClick={(_, item) => { setSelectedEdgeId(item.id); setSelectedNodeId(null); }}
-                            onPaneClick={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }}
+                            onNodeClick={(event, node) => {
+                                if (event.shiftKey || event.ctrlKey || event.metaKey) {
+                                    selectNodes(selectedNodeIds.includes(node.id) ? selectedNodeIds.filter((id) => id !== node.id) : [...selectedNodeIds, node.id]);
+                                    return;
+                                }
+                                selectNodes([node.id]);
+                            }}
+                            onEdgeClick={(_, item) => {
+                                setSelectedNodeIds((current) => current.length ? [] : current);
+                                setSelectedNodeId((current) => current === null ? current : null);
+                                setNodes((items) => {
+                                    let changed = false;
+                                    const next = items.map((node) => {
+                                        if (!node.selected) return node;
+                                        changed = true;
+                                        return { ...node, selected: false };
+                                    });
+                                    return changed ? next : items;
+                                });
+                                setSelectedEdgeId((current) => current === item.id ? current : item.id);
+                            }}
+                            onPaneClick={() => { selectNodes([]); setSelectedEdgeId(null); }}
+                            onSelectionChange={({ nodes: selectionNodes, edges: selectionEdges }) => {
+                                const ids = selectionNodes.map((node) => node.id);
+                                const nextNodeId = ids.at(-1) || null;
+                                const nextEdgeId = ids.length ? null : selectionEdges[0]?.id || null;
+                                setSelectedNodeIds((current) => sameStringArray(current, ids) ? current : ids);
+                                setSelectedNodeId((current) => current === nextNodeId ? current : nextNodeId);
+                                setSelectedEdgeId((current) => current === nextEdgeId ? current : nextEdgeId);
+                            }}
                             onInit={(instance) => {
                                 if (activePage.printGuides?.enabled) {
                                     requestAnimationFrame(() => restorePageViewport(activePage, { x: 0, y: 0, zoom: 1 }, instance));
@@ -2195,9 +2436,9 @@ function EditorCanvas({ diagram, restoreDraft }) {
                         >
                             {(activePage.paperStyle || 'plain') === 'plain' && !activePageIsPrintCanvas && <Background color="#d8d8dd" gap={22} size={1.1} />}
                         </ReactFlow></ArtboardFrame>
-                        <PropertiesPanel selectedNode={selectedNode} selectedEdge={selectedEdge} onUpdateNode={updateNode} onUpdateEdge={updateEdge} onUpload={uploadAsset} uploading={uploading} onMoveLayer={moveLayer} onDelete={deleteSelection} onClose={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }} />
                         <PagesBar pages={pages} activePageId={activePageId} onSelect={selectPage} onAdd={addPage} onDuplicate={duplicatePage} onRename={renamePage} onDelete={deletePage} />
                     </main>
+                    <PropertiesPanel selectedNode={selectedNode} selectedNodes={selectedNodes} selectedEdge={selectedEdge} onUpdateNode={updateNode} onUpdateEdge={updateEdge} onUpload={uploadAsset} uploading={uploading} onMoveLayer={moveLayer} onAlignNodes={alignSelectedNodes} onDelete={deleteSelection} onClose={() => { selectNodes([]); setSelectedEdgeId(null); }} />
                 </div>
             </div>
         </ACTIONS.Provider>

@@ -13,7 +13,7 @@ class DiagramAssetController extends Controller
     public function store(Request $request): JsonResponse
     {
         $request->validate([
-            'asset' => ['required', 'file', 'max:5120', 'mimes:svg,png,jpg,jpeg,webp,gif'],
+            'asset' => ['required', 'file', 'max:30720', 'mimes:svg,png,jpg,jpeg,webp,gif'],
         ]);
 
         return response()->json(
