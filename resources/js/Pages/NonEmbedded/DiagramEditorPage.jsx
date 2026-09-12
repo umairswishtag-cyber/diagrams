@@ -8,7 +8,7 @@ const DIAGRAM_QUERY = `
     }
 `;
 
-export default function DiagramEditorPage({ diagramId = null }) {
+export default function DiagramEditorPage({ diagramId = null, fresh = false }) {
     const [diagram, setDiagram] = useState(null);
     const [loading, setLoading] = useState(Boolean(diagramId));
     const [error, setError] = useState('');
@@ -25,5 +25,5 @@ export default function DiagramEditorPage({ diagramId = null }) {
     if (loading) return <div className="editor-loading">Loading diagram…</div>;
     if (error) return <div className="editor-loading editor-load-error">{error}</div>;
 
-    return <DiagramEditor key={diagram?.id || 'new'} diagram={diagram} />;
+    return <DiagramEditor key={diagram?.id || 'new'} diagram={diagram} restoreDraft={!fresh} />;
 }

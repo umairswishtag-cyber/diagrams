@@ -21,7 +21,9 @@ class DiagramController extends Controller
 
     public function create(): Response
     {
-        return Inertia::render('NonEmbedded/DiagramEditorPage');
+        return Inertia::render('NonEmbedded/DiagramEditorPage', [
+            'fresh' => true,
+        ]);
     }
 
     public function store(Request $request): JsonResponse

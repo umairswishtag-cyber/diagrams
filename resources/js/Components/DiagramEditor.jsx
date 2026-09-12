@@ -1,6 +1,6 @@
 import {
-    Background, BaseEdge, ConnectionMode, Controls, Handle, MarkerType, MiniMap, NodeResizer,
-    Panel, Position, ReactFlow, ReactFlowProvider, addEdge, applyEdgeChanges,
+    Background, BaseEdge, ConnectionMode, Handle, MarkerType, NodeResizer,
+    Position, ReactFlow, ReactFlowProvider, addEdge, applyEdgeChanges,
     applyNodeChanges, getSmoothStepPath, useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -46,8 +46,8 @@ import {
     AlignCenter, AlignLeft, AlignRight, AppWindow, ArrowDown, ArrowLeft, ArrowUp, Bold, Box,
     Braces, BringToFront, Check, ChevronDown, Circle as CircleIcon, Cloud, Code2, Copy,
     Database, Diamond, Download, FileText, GitBranch, Grid2X2, GripVertical,
-    Image as ImageIcon, Italic, Layers3, List, ListOrdered, LogOut, Maximize2, Menu, MessageSquareText,
-    Minimize2, MousePointer2, Network, PanelBottom, PanelTop, Play, Plus, Redo2, Save, SendToBack, Server,
+    Image as ImageIcon, Italic, Layers3, List, ListOrdered, LogOut, Maximize2, Menu,
+    Minimize2, Network, PanelBottom, PanelTop, Play, Plus, Redo2, Ruler, Save, SendToBack, Server,
     Settings, Shapes, Sparkles, Square, Trash2, Type, Underline, Undo2, Upload, Users, X, Zap,
 } from 'lucide-react';
 import { getFontEmbedCSS, toCanvas, toSvg } from 'html-to-image';
@@ -117,6 +117,9 @@ function fontStack(fontFamily = 'DM Sans Variable') {
 }
 
 const DEFAULT_PAGE_SIZE = { width: 1200, height: 760 };
+const PRINT_UNITS_PER_INCH = 100;
+const PDF_RASTER_SCALE = 3;
+const FLATTEN_PDF_EXPORT = true;
 const PAGE_SIZES = {
     'Diagram': { width: 1200, height: 760 },
     'Presentation': { width: 1200, height: 675 },
@@ -134,6 +137,81 @@ const PAPER_STYLES = [
     { value: 'graph-dots', label: 'Graph dots' },
 ];
 const TOP_BOX_HEIGHT = 112;
+const DEFAULT_PRINT_GUIDES = {
+    enabled: false,
+    visible: true,
+    unit: 'in',
+    margins: { left: 50, right: 50, top: 50, bottom: 50 },
+    vertical: [],
+    horizontal: [],
+};
+
+function clampNumber(value, min, max) {
+    return Math.max(min, Math.min(max, Number(value) || 0));
+}
+
+function normalizePrintGuides(guides, width = DEFAULT_PAGE_SIZE.width, height = DEFAULT_PAGE_SIZE.height) {
+    if (!guides?.enabled) return null;
+    const margins = { ...DEFAULT_PRINT_GUIDES.margins, ...(guides.margins || {}) };
+    return {
+        ...DEFAULT_PRINT_GUIDES,
+        ...guides,
+        enabled: true,
+        visible: guides.visible !== false,
+        margins: {
+            left: Math.round(clampNumber(margins.left, 0, width - 20)),
+            right: Math.round(clampNumber(margins.right, 0, width - 20)),
+            top: Math.round(clampNumber(margins.top, 0, height - 20)),
+            bottom: Math.round(clampNumber(margins.bottom, 0, height - 20)),
+        },
+        vertical: Array.isArray(guides.vertical) ? guides.vertical : [],
+        horizontal: Array.isArray(guides.horizontal) ? guides.horizontal : [],
+    };
+}
+
+function inferKdpPrintGuides(page = {}) {
+    const name = String(page.name || '').toLowerCase();
+    const width = Number(page.width);
+    const height = Number(page.height);
+    if (name.includes('kdp cover') || (width === 1748 && height === 1125)) {
+        return {
+            enabled: true,
+            margins: { left: 25, right: 25, top: 25, bottom: 25 },
+            vertical: [
+                { x: 13, label: 'Back trim', tone: 'trim' },
+                { x: 863, label: 'Spine', tone: 'spine' },
+                { x: 886, label: 'Spine', tone: 'spine' },
+                { x: 1735, label: 'Front trim', tone: 'trim' },
+            ],
+            horizontal: [
+                { y: 13, label: 'Trim', tone: 'trim' },
+                { y: 1113, label: 'Trim', tone: 'trim' },
+            ],
+        };
+    }
+    if (name.includes('kdp interior') || (width === 863 && height === 1125)) {
+        return {
+            enabled: true,
+            margins: { left: 38, right: 50, top: 50, bottom: 50 },
+            vertical: [
+                { x: 0, label: 'Bleed', tone: 'bleed' },
+                { x: 850, label: 'Trim', tone: 'trim' },
+            ],
+            horizontal: [
+                { y: 13, label: 'Trim', tone: 'trim' },
+                { y: 1113, label: 'Trim', tone: 'trim' },
+            ],
+        };
+    }
+    if (name.includes('kdp activity') || (width === 850 && height === 1100)) {
+        return { enabled: true, margins: { left: 50, right: 50, top: 50, bottom: 50 }, vertical: [], horizontal: [] };
+    }
+    return null;
+}
+
+function formatPrintInches(value) {
+    return (Number(value || 0) / PRINT_UNITS_PER_INCH).toFixed(2).replace(/\.00$/, '');
+}
 
 function paperBackgroundStyle(style = 'plain', scale = 1) {
     const unit = (value) => `${Math.max(0.65, value * scale)}px`;
@@ -324,6 +402,7 @@ function createPage(number, content = {}) {
         edges: [],
         paperStyle: 'plain',
         showTopBox: false,
+        printGuides: null,
         ...content,
     };
 }
@@ -341,15 +420,22 @@ function loadPages(diagram) {
     const storedPages = Array.isArray(diagram?.pages) && diagram.pages.length ? diagram.pages : null;
     const source = storedPages || [createPage(1, { nodes: diagram?.nodes || seedNodes, edges: diagram?.edges || seedEdges })];
     return source.map((page, index) => ({
-        ...createPage(index + 1),
-        ...page,
-        name: page.name || `Page ${index + 1}`,
-        width: Number(page.width) || DEFAULT_PAGE_SIZE.width,
-        height: Number(page.height) || DEFAULT_PAGE_SIZE.height,
-        nodes: normalizeLayerNodes(Array.isArray(page.nodes) ? page.nodes : []),
-        edges: Array.isArray(page.edges) ? page.edges : [],
-        paperStyle: PAPER_STYLES.some((style) => style.value === page.paperStyle) ? page.paperStyle : 'plain',
-        showTopBox: Boolean(page.showTopBox),
+        ...(() => {
+            const width = Number(page.width) || DEFAULT_PAGE_SIZE.width;
+            const height = Number(page.height) || DEFAULT_PAGE_SIZE.height;
+            return {
+                ...createPage(index + 1),
+                ...page,
+                name: page.name || `Page ${index + 1}`,
+                width,
+                height,
+                nodes: normalizeLayerNodes(Array.isArray(page.nodes) ? page.nodes : []),
+                edges: Array.isArray(page.edges) ? page.edges : [],
+                paperStyle: PAPER_STYLES.some((style) => style.value === page.paperStyle) ? page.paperStyle : 'plain',
+                showTopBox: Boolean(page.showTopBox),
+                printGuides: normalizePrintGuides(page.printGuides || inferKdpPrintGuides({ ...page, width, height }), width, height),
+            };
+        })(),
     }));
 }
 
@@ -372,6 +458,293 @@ const seedEdges = [
     makeEdge('e1-2', '1', '2', '#6d5dfc'), makeEdge('e2-3', '2', '3', '#16a085'),
     makeEdge('e2-4', '2', '4', '#3182ce', 'solid'), makeEdge('e3-5', '3', '5', '#f06b51'),
 ];
+
+const DIAGRAM_TEMPLATES = [
+    {
+        id: 'online-sales-architecture',
+        title: 'Online sales architecture',
+        description: 'Business launch to online orders',
+        icon: Network,
+        page: { name: 'Online sales architecture', width: 1440, height: 900, paperStyle: 'plain' },
+        nodes: [
+            { key: 'idea', label: 'Business idea<br />Market research', shape: 'rounded', icon: 'users', x: 70, y: 90, width: 170, height: 78, color: 0 },
+            { key: 'plan', label: 'Business plan<br />Budget and pricing', shape: 'document', icon: 'file', x: 300, y: 90, width: 175, height: 78, color: 5 },
+            { key: 'brand', label: 'Brand setup<br />Logo, domain, content', shape: 'rectangle', icon: 'settings', x: 540, y: 90, width: 190, height: 78, color: 4 },
+            { key: 'store', label: 'Online store<br />Catalog and checkout', shape: 'rounded', icon: 'window', x: 790, y: 90, width: 190, height: 78, color: 0 },
+            { key: 'marketing', label: 'Marketing channels<br />SEO, ads, social', shape: 'rectangle', icon: 'zap', x: 1040, y: 90, width: 190, height: 78, color: 2 },
+            { key: 'order', label: 'Customer order', shape: 'pill', icon: 'users', x: 1045, y: 285, width: 178, height: 66, color: 3 },
+            { key: 'payment', label: 'Payment gateway<br />Fraud checks', shape: 'diamond', icon: 'settings', x: 795, y: 255, width: 138, height: 138, color: 1 },
+            { key: 'inventory', label: 'Inventory<br />Stock update', shape: 'rectangle', icon: 'database', x: 540, y: 285, width: 180, height: 74, color: 3 },
+            { key: 'fulfillment', label: 'Fulfillment<br />Pick, pack, ship', shape: 'rounded', icon: 'server', x: 300, y: 285, width: 178, height: 74, color: 4 },
+            { key: 'support', label: 'Customer support<br />Returns and reviews', shape: 'document', icon: 'users', x: 70, y: 285, width: 185, height: 74, color: 5 },
+            { key: 'analytics', label: 'Analytics dashboard<br />Sales, CAC, profit', shape: 'rectangle', icon: 'branch', x: 540, y: 510, width: 200, height: 78, color: 0 },
+            { key: 'improve', label: 'Improve offer<br />Repeat growth loop', shape: 'pill', icon: 'zap', x: 795, y: 515, width: 190, height: 68, color: 2 },
+        ],
+        edges: [
+            ['idea', 'plan', 0], ['plan', 'brand', 5], ['brand', 'store', 4], ['store', 'marketing', 0],
+            ['marketing', 'order', 2], ['order', 'payment', 3], ['payment', 'inventory', 1],
+            ['inventory', 'fulfillment', 3], ['fulfillment', 'support', 4], ['order', 'analytics', 0, 'dashed'],
+            ['support', 'analytics', 5, 'dashed'], ['analytics', 'improve', 0], ['improve', 'marketing', 2, 'dashed'],
+        ],
+    },
+    {
+        id: 'kids-daily-routine',
+        title: 'Kids daily routine',
+        description: 'Healthy school day circle',
+        icon: Users,
+        page: { name: 'Kids daily routine', width: 1200, height: 900, paperStyle: 'four-lines' },
+        nodes: [
+            { key: 'wake', label: 'Wake up early<br />Make bed', shape: 'circle', icon: 'zap', x: 500, y: 60, width: 128, height: 128, color: 2 },
+            { key: 'fresh', label: 'Freshen up<br />Breakfast', shape: 'rounded', icon: 'users', x: 760, y: 130, width: 170, height: 74, color: 3 },
+            { key: 'school', label: 'Go to school<br />Morning assembly', shape: 'document', icon: 'file', x: 900, y: 340, width: 180, height: 78, color: 4 },
+            { key: 'study', label: 'Study time<br />Classes and notes', shape: 'rectangle', icon: 'window', x: 750, y: 570, width: 178, height: 78, color: 0 },
+            { key: 'break', label: 'Lunch break<br />Friends and rest', shape: 'pill', icon: 'users', x: 500, y: 660, width: 178, height: 68, color: 3 },
+            { key: 'tuition', label: 'Tuition / homework', shape: 'rounded', icon: 'file', x: 250, y: 570, width: 178, height: 74, color: 5 },
+            { key: 'play', label: 'Outdoor play<br />Sports activity', shape: 'circle', icon: 'zap', x: 115, y: 340, width: 130, height: 130, color: 1 },
+            { key: 'family', label: 'Family dinner<br />Prepare bag', shape: 'rectangle', icon: 'users', x: 245, y: 130, width: 178, height: 74, color: 4 },
+            { key: 'sleep', label: 'Sleep on time', shape: 'pill', icon: 'settings', x: 500, y: 360, width: 170, height: 66, color: 0 },
+        ],
+        edges: [
+            ['wake', 'fresh', 2], ['fresh', 'school', 3], ['school', 'study', 4], ['study', 'break', 0],
+            ['break', 'tuition', 3], ['tuition', 'play', 5], ['play', 'family', 1], ['family', 'wake', 4, 'dashed'],
+            ['family', 'sleep', 4], ['sleep', 'wake', 0, 'dashed'],
+        ],
+    },
+    {
+        id: 'working-professional-day',
+        title: 'Working professional day',
+        description: 'Office routine and productivity',
+        icon: Users,
+        page: { name: 'Working professional day', width: 1320, height: 820, paperStyle: 'plain' },
+        nodes: [
+            { key: 'start', label: 'Morning planning<br />Top 3 priorities', shape: 'rounded', icon: 'file', x: 70, y: 90, width: 190, height: 78, color: 0 },
+            { key: 'commute', label: 'Commute / login', shape: 'pill', icon: 'window', x: 330, y: 95, width: 170, height: 66, color: 5 },
+            { key: 'standup', label: 'Team standup<br />Blockers and handoff', shape: 'rectangle', icon: 'users', x: 575, y: 90, width: 195, height: 78, color: 3 },
+            { key: 'deepwork', label: 'Deep work block<br />High focus tasks', shape: 'rounded', icon: 'code', x: 845, y: 90, width: 200, height: 78, color: 4 },
+            { key: 'decision', label: 'Need approval?', shape: 'diamond', icon: 'settings', x: 565, y: 285, width: 150, height: 150, color: 2 },
+            { key: 'manager', label: 'Manager review<br />Feedback loop', shape: 'document', icon: 'users', x: 845, y: 315, width: 190, height: 78, color: 1 },
+            { key: 'execute', label: 'Execute tasks<br />Update tracker', shape: 'rectangle', icon: 'branch', x: 330, y: 320, width: 185, height: 78, color: 0 },
+            { key: 'breaks', label: 'Breaks<br />Lunch and reset', shape: 'circle', icon: 'zap', x: 95, y: 305, width: 128, height: 128, color: 3 },
+            { key: 'report', label: 'End of day report<br />Tomorrow plan', shape: 'document', icon: 'file', x: 575, y: 550, width: 205, height: 82, color: 5 },
+            { key: 'learn', label: 'Learning / family<br />Recharge', shape: 'pill', icon: 'users', x: 850, y: 560, width: 195, height: 66, color: 2 },
+        ],
+        edges: [
+            ['start', 'commute', 0], ['commute', 'standup', 5], ['standup', 'deepwork', 3], ['deepwork', 'decision', 4],
+            ['decision', 'manager', 2, 'dashed'], ['manager', 'execute', 1], ['decision', 'execute', 2],
+            ['execute', 'breaks', 0, 'dashed'], ['breaks', 'execute', 3, 'dashed'], ['execute', 'report', 0],
+            ['report', 'learn', 5], ['learn', 'start', 2, 'dashed'],
+        ],
+    },
+    {
+        id: 'shopify-workflow',
+        title: 'Shopify workflow',
+        description: 'Store order and fulfillment flow',
+        icon: Cloud,
+        page: { name: 'Shopify workflow', width: 1440, height: 860, paperStyle: 'graph-dots' },
+        nodes: [
+            { key: 'shopify', label: 'Shopify storefront', shape: 'rounded', icon: 'cloud', x: 80, y: 120, width: 190, height: 78, color: 3 },
+            { key: 'product', label: 'Product catalog<br />Variants and media', shape: 'document', icon: 'file', x: 330, y: 120, width: 190, height: 78, color: 4 },
+            { key: 'cart', label: 'Cart and checkout', shape: 'rectangle', icon: 'window', x: 580, y: 120, width: 185, height: 78, color: 0 },
+            { key: 'payment', label: 'Payment captured?', shape: 'diamond', icon: 'settings', x: 835, y: 90, width: 145, height: 145, color: 2 },
+            { key: 'order', label: 'Order created<br />Webhook received', shape: 'rounded', icon: 'server', x: 1085, y: 120, width: 200, height: 78, color: 1 },
+            { key: 'sync', label: 'Sync app service<br />Validate payload', shape: 'rectangle', icon: 'code', x: 1085, y: 330, width: 205, height: 78, color: 4 },
+            { key: 'db', label: 'Local database<br />Orders, customers, line items', shape: 'document', icon: 'database', x: 820, y: 330, width: 215, height: 82, color: 3 },
+            { key: 'inventory', label: 'Inventory update<br />Reserved stock', shape: 'rectangle', icon: 'branch', x: 560, y: 330, width: 205, height: 78, color: 5 },
+            { key: 'fulfillment', label: 'Fulfillment<br />Packing and tracking', shape: 'rounded', icon: 'server', x: 315, y: 330, width: 200, height: 78, color: 0 },
+            { key: 'email', label: 'Customer emails<br />Confirmation and delivery', shape: 'document', icon: 'users', x: 80, y: 330, width: 205, height: 82, color: 2 },
+            { key: 'returns', label: 'Return / refund flow', shape: 'pill', icon: 'settings', x: 560, y: 560, width: 190, height: 68, color: 1 },
+            { key: 'analytics', label: 'Reports<br />Revenue and repeat purchase', shape: 'rectangle', icon: 'branch', x: 820, y: 555, width: 220, height: 78, color: 0 },
+        ],
+        edges: [
+            ['shopify', 'product', 3], ['product', 'cart', 4], ['cart', 'payment', 0], ['payment', 'order', 2],
+            ['order', 'sync', 1], ['sync', 'db', 4], ['db', 'inventory', 3], ['inventory', 'fulfillment', 5],
+            ['fulfillment', 'email', 0], ['fulfillment', 'returns', 1, 'dashed'], ['db', 'analytics', 3],
+            ['analytics', 'product', 0, 'dashed'],
+        ],
+    },
+    {
+        id: 'business-database-schema',
+        title: 'Business database schema',
+        description: 'Core tables and relationships',
+        icon: Database,
+        page: { name: 'Business database schema', width: 1440, height: 900, paperStyle: 'boxes' },
+        nodes: [
+            { key: 'customers', label: '<strong>customers</strong><br />id PK<br />name<br />email<br />phone', shape: 'document', icon: 'users', x: 70, y: 85, width: 210, height: 140, color: 0, fontSize: 12 },
+            { key: 'addresses', label: '<strong>addresses</strong><br />id PK<br />customer_id FK<br />city<br />country', shape: 'document', icon: 'file', x: 70, y: 330, width: 210, height: 140, color: 5, fontSize: 12 },
+            { key: 'orders', label: '<strong>orders</strong><br />id PK<br />customer_id FK<br />status<br />total_amount', shape: 'document', icon: 'file', x: 380, y: 85, width: 220, height: 150, color: 3, fontSize: 12 },
+            { key: 'order_items', label: '<strong>order_items</strong><br />id PK<br />order_id FK<br />product_id FK<br />quantity<br />unit_price', shape: 'document', icon: 'branch', x: 700, y: 85, width: 230, height: 165, color: 4, fontSize: 12 },
+            { key: 'products', label: '<strong>products</strong><br />id PK<br />sku<br />name<br />price<br />stock_qty', shape: 'document', icon: 'database', x: 1030, y: 85, width: 230, height: 165, color: 1, fontSize: 12 },
+            { key: 'categories', label: '<strong>categories</strong><br />id PK<br />name<br />parent_id', shape: 'document', icon: 'file', x: 1030, y: 350, width: 220, height: 130, color: 2, fontSize: 12 },
+            { key: 'payments', label: '<strong>payments</strong><br />id PK<br />order_id FK<br />gateway<br />amount<br />paid_at', shape: 'document', icon: 'settings', x: 380, y: 350, width: 220, height: 155, color: 0, fontSize: 12 },
+            { key: 'shipments', label: '<strong>shipments</strong><br />id PK<br />order_id FK<br />carrier<br />tracking_no<br />delivered_at', shape: 'document', icon: 'server', x: 700, y: 350, width: 230, height: 160, color: 5, fontSize: 12 },
+            { key: 'users', label: '<strong>admin_users</strong><br />id PK<br />name<br />role<br />last_login', shape: 'document', icon: 'users', x: 380, y: 625, width: 220, height: 140, color: 4, fontSize: 12 },
+            { key: 'audit', label: '<strong>audit_logs</strong><br />id PK<br />user_id FK<br />action<br />entity_type', shape: 'document', icon: 'file', x: 700, y: 625, width: 230, height: 140, color: 3, fontSize: 12 },
+        ],
+        edges: [
+            ['customers', 'orders', 0], ['customers', 'addresses', 5], ['orders', 'order_items', 3],
+            ['order_items', 'products', 4], ['products', 'categories', 1], ['orders', 'payments', 0],
+            ['orders', 'shipments', 5], ['users', 'audit', 4], ['audit', 'orders', 3, 'dashed'],
+        ],
+    },
+];
+
+const KDP_TEMPLATES = [
+    {
+        id: 'kdp-paperback-cover-8-5x11-100-bw-white',
+        title: 'KDP cover 8.5 x 11',
+        description: '100 pages, BW, white paper',
+        icon: FileText,
+        disableConnectors: true,
+        page: { name: 'KDP Cover 8.5 x 11 - 100 BW White', width: 1748, height: 1125, paperStyle: 'plain' },
+        printGuides: {
+            enabled: true,
+            margins: { left: 25, right: 25, top: 25, bottom: 25 },
+            vertical: [
+                { x: 13, label: 'Back trim', tone: 'trim' },
+                { x: 863, label: 'Spine', tone: 'spine' },
+                { x: 886, label: 'Spine', tone: 'spine' },
+                { x: 1735, label: 'Front trim', tone: 'trim' },
+            ],
+            horizontal: [
+                { y: 13, label: 'Trim', tone: 'trim' },
+                { y: 1113, label: 'Trim', tone: 'trim' },
+            ],
+        },
+        nodes: [
+            { key: 'full', label: '<strong>Full cover PDF</strong><br />17.475 x 11.25 in at 100 pages<br />Back cover + spine + front cover', shape: 'rectangle', icon: 'none', x: 0, y: 0, width: 1748, height: 1125, color: 5, backgroundColor: '#f8f7fb', showShadow: false, fontSize: 18, guide: true },
+            { key: 'back', label: '<strong>BACK COVER</strong><br />8.5 x 11 in trim<br />Add blurb, author bio, reviews', shape: 'rectangle', icon: 'file', x: 13, y: 13, width: 850, height: 1100, color: 4, backgroundColor: '#ffffff', showShadow: false, fontSize: 20, guide: true },
+            { key: 'spine', label: '<strong>SPINE</strong><br />0.225 in<br />Spine text allowed for 79+ pages', shape: 'rectangle', icon: 'none', x: 863, y: 13, width: 23, height: 1100, color: 1, backgroundColor: '#fff0ec', showShadow: false, fontSize: 10, guide: true },
+            { key: 'front', label: '<strong>FRONT COVER</strong><br />Book title<br />Subtitle<br />Author name', shape: 'rectangle', icon: 'file', x: 885, y: 13, width: 850, height: 1100, color: 0, backgroundColor: '#ffffff', showShadow: false, fontSize: 22, guide: true },
+            { key: 'backSafe', label: 'Back safe area<br />Keep text/art inside', shape: 'rectangle', icon: 'none', x: 25, y: 25, width: 838, height: 1075, color: 3, backgroundColor: 'rgba(22,160,133,.06)', showShadow: false, fontSize: 14, guide: true },
+            { key: 'frontSafe', label: 'Front safe area<br />No important text near trim', shape: 'rectangle', icon: 'none', x: 898, y: 25, width: 838, height: 1075, color: 3, backgroundColor: 'rgba(22,160,133,.06)', showShadow: false, fontSize: 14, guide: true },
+            { key: 'frontArt', label: 'Drop front cover artwork / image here', shape: 'rectangle', icon: 'none', x: 1025, y: 500, width: 480, height: 300, color: 5, backgroundColor: 'rgba(83,97,116,.05)', showShadow: false, fontSize: 20 },
+            { key: 'backBlurb', label: 'Back cover blurb<br />Replace with your book description', shape: 'document', icon: 'file', x: 155, y: 260, width: 520, height: 220, color: 5, backgroundColor: '#ffffff', showShadow: false, fontSize: 20 },
+            { key: 'barcode', label: 'Barcode area<br />Leave clear if KDP adds barcode', shape: 'rectangle', icon: 'none', x: 640, y: 865, width: 200, height: 120, color: 2, backgroundColor: '#fff7df', showShadow: false, fontSize: 13, guide: true },
+            { key: 'bleedNote', label: '<strong>Bleed</strong>: extend backgrounds 0.125 in past trim on outside edges', shape: 'pill', icon: 'settings', x: 610, y: 25, width: 320, height: 46, color: 1, backgroundColor: '#fff0ec', showShadow: false, fontSize: 12 },
+            { key: 'title', label: 'YOUR BOOK TITLE', shape: 'text', icon: 'none', x: 1075, y: 260, width: 440, height: 86, color: 0, backgroundColor: 'transparent', textColor: '#20212a', showShadow: false, fontSize: 42 },
+            { key: 'subtitle', label: 'Subtitle or promise line', shape: 'text', icon: 'none', x: 1120, y: 370, width: 350, height: 48, color: 5, backgroundColor: 'transparent', textColor: '#514f59', showShadow: false, fontSize: 24 },
+            { key: 'author', label: 'Author Name', shape: 'text', icon: 'none', x: 1175, y: 930, width: 250, height: 42, color: 3, backgroundColor: 'transparent', textColor: '#20212a', showShadow: false, fontSize: 24 },
+        ],
+        edges: [],
+    },
+    {
+        id: 'kdp-interior-page-8-5x11-bleed',
+        title: 'KDP interior page',
+        description: '8.5 x 11 with bleed and margins',
+        icon: FileText,
+        disableConnectors: true,
+        page: { name: 'KDP Interior Page 8.5 x 11 Bleed', width: 863, height: 1125, paperStyle: 'plain' },
+        printGuides: {
+            enabled: true,
+            margins: { left: 38, right: 50, top: 50, bottom: 50 },
+            vertical: [
+                { x: 0, label: 'Bleed', tone: 'bleed' },
+                { x: 850, label: 'Trim', tone: 'trim' },
+            ],
+            horizontal: [
+                { y: 13, label: 'Trim', tone: 'trim' },
+                { y: 1113, label: 'Trim', tone: 'trim' },
+            ],
+        },
+        nodes: [
+            { key: 'page', label: '<strong>Full bleed page</strong><br />8.625 x 11.25 in<br />Export as PDF', shape: 'rectangle', icon: 'none', x: 0, y: 0, width: 863, height: 1125, color: 5, backgroundColor: '#ffffff', showShadow: false, fontSize: 18, guide: true },
+            { key: 'trim', label: '<strong>Trim area</strong><br />Final book page: 8.5 x 11 in', shape: 'rectangle', icon: 'none', x: 0, y: 13, width: 850, height: 1100, color: 0, backgroundColor: 'rgba(109,93,252,.04)', showShadow: false, fontSize: 15, guide: true },
+            { key: 'safe', label: '<strong>Safe content area</strong><br />100 pages: use at least 0.375 in margins<br />Keep important text here', shape: 'rectangle', icon: 'none', x: 38, y: 50, width: 775, height: 1025, color: 3, backgroundColor: 'rgba(22,160,133,.06)', showShadow: false, fontSize: 18, guide: true },
+            { key: 'header', label: 'Chapter / Section Title', shape: 'text', icon: 'none', x: 250, y: 90, width: 360, height: 42, color: 0, backgroundColor: 'transparent', textColor: '#20212a', showShadow: false, fontSize: 30 },
+            { key: 'body', label: 'Place manuscript text, journal prompts, worksheets, coloring artwork, or activity content inside the safe area.', shape: 'document', icon: 'file', x: 165, y: 250, width: 530, height: 210, color: 5, backgroundColor: '#ffffff', showShadow: false, fontSize: 18 },
+            { key: 'footer', label: 'Page number / footer', shape: 'text', icon: 'none', x: 335, y: 1018, width: 190, height: 36, color: 5, backgroundColor: 'transparent', textColor: '#6a6771', showShadow: false, fontSize: 16 },
+            { key: 'outside', label: 'Outside bleed side<br />graphics can extend here', shape: 'pill', icon: 'none', x: 610, y: 18, width: 230, height: 42, color: 1, backgroundColor: '#fff0ec', showShadow: false, fontSize: 12 },
+        ],
+        edges: [],
+    },
+    {
+        id: 'kdp-activity-book-page',
+        title: 'KDP activity page',
+        description: 'Puzzle, tracing, worksheet layout',
+        icon: Grid2X2,
+        disableConnectors: true,
+        page: { name: 'KDP Activity Book Page', width: 850, height: 1100, paperStyle: 'plain' },
+        printGuides: {
+            enabled: true,
+            margins: { left: 50, right: 50, top: 50, bottom: 50 },
+            vertical: [],
+            horizontal: [],
+        },
+        nodes: [
+            { key: 'title', label: 'Daily Practice Page', shape: 'text', icon: 'none', x: 190, y: 70, width: 470, height: 58, color: 0, backgroundColor: 'transparent', textColor: '#20212a', showShadow: false, fontSize: 38 },
+            { key: 'instruction', label: 'Instructions: Trace, match, color, or solve the activity below.', shape: 'rounded', icon: 'file', x: 125, y: 150, width: 600, height: 64, color: 5, backgroundColor: '#ffffff', showShadow: false, fontSize: 16 },
+            { key: 'activity', label: '<strong>Main activity area</strong><br />Add puzzle, maze, coloring artwork, writing lines, or learning prompt', shape: 'rectangle', icon: 'none', x: 95, y: 255, width: 660, height: 520, color: 0, backgroundColor: '#ffffff', showShadow: false, fontSize: 24 },
+            { key: 'answer', label: 'Answer / Notes', shape: 'document', icon: 'file', x: 95, y: 825, width: 310, height: 140, color: 3, backgroundColor: '#ffffff', showShadow: false, fontSize: 18 },
+            { key: 'parent', label: 'Parent / Teacher signature', shape: 'document', icon: 'users', x: 445, y: 825, width: 310, height: 140, color: 2, backgroundColor: '#ffffff', showShadow: false, fontSize: 18 },
+            { key: 'pageNo', label: 'Page 1', shape: 'text', icon: 'none', x: 370, y: 1015, width: 110, height: 36, color: 5, backgroundColor: 'transparent', textColor: '#6a6771', showShadow: false, fontSize: 16 },
+        ],
+        edges: [],
+    },
+    {
+        id: 'kdp-print-preflight-checklist',
+        title: 'KDP print checklist',
+        description: 'Cover acceptance and export rules',
+        icon: Check,
+        disableConnectors: true,
+        page: { name: 'KDP Print Preflight Checklist', width: 1200, height: 900, paperStyle: 'plain' },
+        nodes: [
+            { key: 'title', label: '<strong>KDP print cover preflight</strong><br />Use this as a final review page before export/upload.', shape: 'rounded', icon: 'settings', x: 90, y: 70, width: 1020, height: 86, color: 0, backgroundColor: '#f4f2ff', showShadow: false, fontSize: 22 },
+            { key: 'format', label: '<strong>File format</strong><br />Paperback/hardcover: single-page PDF spread containing back cover, spine, and front cover.<br />eBook: high-resolution JPG or TIFF.', shape: 'document', icon: 'file', x: 90, y: 205, width: 490, height: 150, color: 5, backgroundColor: '#ffffff', showShadow: false, fontSize: 17 },
+            { key: 'color', label: '<strong>Color space</strong><br />Print cover: CMYK preferred for predictable print color.<br />eBook cover: RGB.', shape: 'document', icon: 'settings', x: 620, y: 205, width: 490, height: 150, color: 3, backgroundColor: '#ffffff', showShadow: false, fontSize: 17 },
+            { key: 'dpi', label: '<strong>Image resolution</strong><br />Use 300 DPI minimum at actual print size.<br />Do not stretch low-resolution images.', shape: 'document', icon: 'file', x: 90, y: 395, width: 490, height: 150, color: 1, backgroundColor: '#ffffff', showShadow: false, fontSize: 17 },
+            { key: 'fonts', label: '<strong>Fonts</strong><br />Embed all fonts in the final PDF.<br />Keep cover text at least 7 pt and readable.', shape: 'document', icon: 'file', x: 620, y: 395, width: 490, height: 150, color: 2, backgroundColor: '#ffffff', showShadow: false, fontSize: 17 },
+            { key: 'flatten', label: '<strong>Flatten before upload</strong><br />Flatten layers, transparency, and vector effects to avoid missing elements or print artifacts.', shape: 'document', icon: 'settings', x: 90, y: 585, width: 490, height: 150, color: 4, backgroundColor: '#ffffff', showShadow: false, fontSize: 17 },
+            { key: 'size', label: '<strong>File size</strong><br />Cover file must be under 650 MB.<br />Keep a production copy and an editable source copy.', shape: 'document', icon: 'file', x: 620, y: 585, width: 490, height: 150, color: 0, backgroundColor: '#ffffff', showShadow: false, fontSize: 17 },
+            { key: 'final', label: 'Final check: bleed reaches edges, barcode area is clear, title/author match KDP book details, spine text only on 79+ page books.', shape: 'pill', icon: 'zap', x: 190, y: 780, width: 820, height: 56, color: 3, backgroundColor: '#e5faf4', showShadow: false, fontSize: 16 },
+        ],
+        edges: [],
+    },
+];
+
+function slugify(value = 'workflow') {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'workflow';
+}
+
+function buildTemplatePage(template, pageNumber = 1) {
+    const prefix = `template-${template.id}-${Date.now()}`;
+    const keyToId = new Map(template.nodes.map((node) => [node.key, `${prefix}-${node.key}`]));
+    const nodes = template.nodes.map((node, index) => ({
+        id: keyToId.get(node.key),
+        type: 'workflow',
+        position: { x: node.x, y: node.y },
+        zIndex: index + 1,
+        style: { width: node.width, height: node.height },
+        data: {
+            label: plainText(node.label),
+            richText: node.label,
+            shape: node.shape || 'rounded',
+            icon: node.icon || 'none',
+            color: COLORS[node.color ?? (index % COLORS.length)],
+            fontFamily: 'DM Sans Variable',
+            fontSize: node.fontSize || 13,
+            hideBorder: Boolean(node.hideBorder),
+            backgroundColor: node.backgroundColor || null,
+            textColor: node.textColor || null,
+            showShadow: node.showShadow ?? null,
+            isGuide: Boolean(node.guide),
+            disableHandles: Boolean(template.disableConnectors || node.disableHandles),
+        },
+    }));
+    const edges = (template.edges || []).map(([from, to, color = 0, lineStyle = 'solid'], index) => (
+        makeEdge(`${prefix}-edge-${index}`, keyToId.get(from), keyToId.get(to), COLORS[color]?.value || COLORS[0].value, lineStyle)
+    ));
+
+    return createPage(pageNumber, {
+        name: template.page.name,
+        width: template.page.width,
+        height: template.page.height,
+        paperStyle: template.page.paperStyle || 'plain',
+        showTopBox: Boolean(template.page.showTopBox),
+        printGuides: normalizePrintGuides(template.printGuides, template.page.width, template.page.height),
+        nodes,
+        edges,
+    });
+}
 
 function setUint24(bytes, offset, value) {
     bytes[offset] = value & 255;
@@ -434,6 +807,7 @@ function WorkflowNode({ id, data, selected, width, height }) {
     const Icon = ICONS[data.icon] || null;
     const showShadow = data.showShadow ?? (!isPageImage && data.shape !== 'text');
     const backgroundColor = data.backgroundColor || (isPageImage || data.shape === 'text' ? 'transparent' : '#ffffff');
+    const showHandles = !data.disableHandles && !data.isGuide;
 
     useEffect(() => { const value = data.richText || data.label; setDraft(value); draftRef.current = value; }, [data.label, data.richText]);
     const finishEditing = () => {
@@ -444,7 +818,7 @@ function WorkflowNode({ id, data, selected, width, height }) {
 
     return (
         <div
-            className={`workflow-node workflow-node--${data.shape} ${data.hideBorder ? 'has-hidden-border' : ''} ${showShadow ? 'has-shadow' : ''} ${selected ? 'is-selected' : ''}`}
+            className={`workflow-node workflow-node--${data.shape} ${data.isGuide ? 'is-guide' : ''} ${data.hideBorder ? 'has-hidden-border' : ''} ${showShadow ? 'has-shadow' : ''} ${selected ? 'is-selected' : ''}`}
             style={{ '--node-color': data.color.value, '--node-soft': data.color.soft, backgroundColor, width: width || undefined, height: height || undefined, fontFamily: fontStack(data.fontFamily) }}
             onDoubleClick={(event) => { if (!isPageImage) { event.stopPropagation(); setEditing(true); } }}
         >
@@ -453,14 +827,14 @@ function WorkflowNode({ id, data, selected, width, height }) {
                 keepAspectRatio={['circle', 'diamond'].includes(data.shape)} color={data.color.value}
                 onResizeStart={beginResize} onResizeEnd={endResize}
             />
-            {[Position.Top, Position.Right, Position.Bottom, Position.Left].map((position) => (
+            {showHandles && [Position.Top, Position.Right, Position.Bottom, Position.Left].map((position) => (
                 <Handle
                     key={position} type="source" id={position} position={position} className="workflow-handle"
                     aria-label={`Draw connector from ${position}`} title="Drag to draw an arrow"
                 />
             ))}
             <div className="workflow-node__inner">
-                {isPageImage ? <img className="workflow-node__page-image" src={data.imageUrl} alt={data.label || ''} style={{ objectFit: data.imageFit || 'contain' }} /> : <>
+                {isPageImage ? <img className="workflow-node__page-image" src={data.imageUrl} alt={data.label || ''} draggable={false} decoding="async" style={{ objectFit: data.imageFit || 'contain' }} /> : <>
                     {data.imageUrl ? <span className="workflow-node__icon workflow-node__icon--custom"><img src={data.imageUrl} alt="" /></span> : Icon && <span className="workflow-node__icon"><Icon size={20} strokeWidth={1.9} /></span>}
                     {editing ? (
                         <div
@@ -528,8 +902,23 @@ function LayerList({ nodes, selectedNodeId, onSelectNode, onMoveLayer, onReorder
     </div>;
 }
 
-function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed, nodes, selectedNodeId, onSelectNode, onMoveLayer, onReorderLayer }) {
+function SidebarAccordion({ id, title, count, open, onToggle, children }) {
+    return (
+        <section className={`sidebar-accordion ${open ? 'is-open' : ''}`}>
+            <button type="button" className="sidebar-accordion__trigger" onClick={() => onToggle(id)} aria-expanded={open}>
+                <span>{title}</span>
+                {typeof count === 'number' && <b>{count}</b>}
+                <ChevronDown size={15} />
+            </button>
+            {open && <div className="sidebar-accordion__content">{children}</div>}
+        </section>
+    );
+}
+
+function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed, nodes, selectedNodeId, onSelectNode, onMoveLayer, onReorderLayer, onApplyTemplate }) {
     const [view, setView] = useState('elements');
+    const [openAccordions, setOpenAccordions] = useState({ shapes: true, templates: true, kdp: true, media: true });
+    const toggleAccordion = (id) => setOpenAccordions((items) => ({ ...items, [id]: !items[id] }));
     return (
         <aside className={`editor-sidebar ${collapsed ? 'is-collapsed' : ''}`}>
             <button className="sidebar-collapse" onClick={() => setCollapsed(!collapsed)} aria-label="Toggle sidebar">
@@ -542,18 +931,52 @@ function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed, node
                 </div>
                 {view === 'elements' ? <>
                 <div className="sidebar-heading"><p>ELEMENTS</p><span>Drag or click to add</span></div>
-                <div className="shape-grid">
-                    {SHAPES.map(({ type, label, icon: Icon }) => (
-                        <button
-                            key={type} type="button" className="shape-card" draggable
-                            onDragStart={(event) => { event.dataTransfer.setData('application/workflow-shape', type); event.dataTransfer.effectAllowed = 'move'; }}
-                            onClick={() => onAddNode(type)}
-                        >
-                            <span className={`shape-preview shape-preview--${type}`}><Icon size={22} strokeWidth={1.6} /></span>
-                            <span>{label}</span>
-                        </button>
-                    ))}
-                </div>
+                <SidebarAccordion id="shapes" title="Shapes & boxes" count={SHAPES.length} open={openAccordions.shapes} onToggle={toggleAccordion}>
+                    <div className="shape-grid">
+                        {SHAPES.map(({ type, label, icon: Icon }) => (
+                            <button
+                                key={type} type="button" className="shape-card" draggable
+                                onDragStart={(event) => { event.dataTransfer.setData('application/workflow-shape', type); event.dataTransfer.effectAllowed = 'move'; }}
+                                onClick={() => onAddNode(type)}
+                            >
+                                <span className={`shape-preview shape-preview--${type}`}><Icon size={22} strokeWidth={1.6} /></span>
+                                <span>{label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </SidebarAccordion>
+                <SidebarAccordion id="templates" title="Templates" count={DIAGRAM_TEMPLATES.length} open={openAccordions.templates} onToggle={toggleAccordion}>
+                    <div className="template-list">
+                        {DIAGRAM_TEMPLATES.map((template) => {
+                            const TemplateIcon = template.icon || Network;
+                            return (
+                                <button key={template.id} type="button" className="template-card" onClick={() => onApplyTemplate(template)}>
+                                    <span className="template-card__icon"><TemplateIcon size={15} /></span>
+                                    <span><strong>{template.title}</strong><small>{template.description}</small></span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </SidebarAccordion>
+                <SidebarAccordion id="kdp" title="Amazon KDP" count={KDP_TEMPLATES.length} open={openAccordions.kdp} onToggle={toggleAccordion}>
+                    <div className="template-list template-list--kdp">
+                        {KDP_TEMPLATES.map((template) => {
+                            const TemplateIcon = template.icon || FileText;
+                            return (
+                                <button key={template.id} type="button" className="template-card template-card--kdp" onClick={() => onApplyTemplate(template)}>
+                                    <span className="template-card__icon"><TemplateIcon size={15} /></span>
+                                    <span><strong>{template.title}</strong><small>{template.description}</small></span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </SidebarAccordion>
+                <SidebarAccordion id="media" title="Media" open={openAccordions.media} onToggle={toggleAccordion}>
+                    <label className={`upload-media-button ${uploading ? 'is-loading' : ''}`}>
+                        <Upload size={16} /><span><strong>{uploading ? 'Uploading...' : 'Add image to page'}</strong><small>Draggable SVG, PNG, JPG, WebP or GIF</small></span>
+                        <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,.gif,image/*" disabled={uploading} onChange={(event) => { onUpload(event.target.files?.[0]); event.target.value = ''; }} />
+                    </label>
+                </SidebarAccordion>
                 <div className="sidebar-section-title"><span>QUICK START</span></div>
                 <button type="button" className="quick-node" onClick={() => onAddNode('rounded', { label: 'New screen', icon: 'window' })}>
                     <span className="quick-node__icon purple"><AppWindow size={17} /></span><span><strong>Screen</strong><small>Interface or page</small></span><Plus size={15} />
@@ -564,10 +987,6 @@ function Sidebar({ onAddNode, onUpload, uploading, collapsed, setCollapsed, node
                 <button type="button" className="quick-node" onClick={() => onAddNode('circle', { label: 'Data store', icon: 'database' })}>
                     <span className="quick-node__icon coral"><Database size={17} /></span><span><strong>Data store</strong><small>Database or cache</small></span><Plus size={15} />
                 </button>
-                <label className={`upload-media-button ${uploading ? 'is-loading' : ''}`}>
-                    <Upload size={16} /><span><strong>{uploading ? 'Uploading...' : 'Add image to page'}</strong><small>Draggable SVG, PNG, JPG, WebP or GIF</small></span>
-                    <input type="file" accept=".svg,.png,.jpg,.jpeg,.webp,.gif,image/*" disabled={uploading} onChange={(event) => { onUpload(event.target.files?.[0]); event.target.value = ''; }} />
-                </label>
                 <div className="sidebar-tip"><Sparkles size={16} /><p><strong>Pro tip</strong><br />Double-click text to edit it. Use the style panel for lists, emphasis and alignment.</p></div>
                 </> : <LayerList nodes={nodes} selectedNodeId={selectedNodeId} onSelectNode={onSelectNode} onMoveLayer={onMoveLayer} onReorderLayer={onReorderLayer} />}
             </>}
@@ -785,7 +1204,7 @@ function ExportMenu({ onExport, exporting, filename, onFilenameChange, pages }) 
     );
 }
 
-function PageControls({ page, elementCount, onResize, onAddImage, onImportBackground, importing, onBackgroundFit, onRemoveBackground, onPaperStyle, onTopBox, expanded, onToggleExpanded }) {
+function PageControls({ page, onResize, onAddImage, onImportBackground, importing, onBackgroundFit, onRemoveBackground, onPaperStyle, onTopBox, onFitView, onTogglePrintGuides, expanded, onToggleExpanded }) {
     const preset = Object.entries(PAGE_SIZES).find(([, size]) => size.width === page.width && size.height === page.height)?.[0] || 'Custom';
     const [custom, setCustom] = useState({ width: page.width, height: page.height });
     const [selectedPreset, setSelectedPreset] = useState(preset);
@@ -796,7 +1215,6 @@ function PageControls({ page, elementCount, onResize, onAddImage, onImportBackgr
     });
     return (
         <div className="artboard-controls">
-            <div className="artboard-summary"><strong>{page.name}</strong><span>{elementCount} elements</span></div>
             <div className="page-settings">
                 <label>Paper<select value={page.paperStyle || 'plain'} onChange={(event) => onPaperStyle(event.target.value)}>
                     {PAPER_STYLES.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
@@ -824,13 +1242,166 @@ function PageControls({ page, elementCount, onResize, onAddImage, onImportBackgr
                     <b>×</b>
                     <label><span>H</span><input type="number" min="240" max="4000" value={custom.height} onChange={(event) => setCustom((value) => ({ ...value, height: event.target.value }))} onBlur={applyCustom} onKeyDown={(event) => event.key === 'Enter' && applyCustom()} /></label>
                 </div>}
+                <ToolButton icon={Grid2X2} label="Fit view" onClick={onFitView} />
+                {page.printGuides?.enabled && <ToolButton icon={Ruler} label={page.printGuides.visible === false ? 'Show KDP rulers' : 'Hide KDP rulers'} onClick={() => onTogglePrintGuides(page.printGuides.visible === false)} active={page.printGuides.visible !== false} />}
                 <ToolButton icon={expanded ? Minimize2 : Maximize2} label={expanded ? 'Restore canvas size' : 'Expand canvas'} onClick={onToggleExpanded} active={expanded} />
             </div>
         </div>
     );
 }
 
-function ArtboardFrame({ page, children }) {
+function PrintRulers({ page, scale, onChange }) {
+    const guides = normalizePrintGuides(page.printGuides, page.width, page.height);
+    if (!guides?.visible) return null;
+    const margin = guides.margins;
+    const inchMarksX = Array.from({ length: Math.floor(page.width / PRINT_UNITS_PER_INCH) + 1 }, (_, index) => index);
+    const inchMarksY = Array.from({ length: Math.floor(page.height / PRINT_UNITS_PER_INCH) + 1 }, (_, index) => index);
+    const updateMargins = (patch) => {
+        const nextMargins = { ...margin, ...patch };
+        onChange(normalizePrintGuides({ ...guides, margins: nextMargins }, page.width, page.height));
+    };
+    const beginMarginDrag = (side, event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const start = { x: event.clientX, y: event.clientY, margins: { ...margin } };
+        const move = (moveEvent) => {
+            const deltaX = (moveEvent.clientX - start.x) / scale;
+            const deltaY = (moveEvent.clientY - start.y) / scale;
+            if (side === 'left') updateMargins({ left: clampNumber(start.margins.left + deltaX, 0, page.width - start.margins.right - 20) });
+            if (side === 'right') updateMargins({ right: clampNumber(start.margins.right - deltaX, 0, page.width - start.margins.left - 20) });
+            if (side === 'top') updateMargins({ top: clampNumber(start.margins.top + deltaY, 0, page.height - start.margins.bottom - 20) });
+            if (side === 'bottom') updateMargins({ bottom: clampNumber(start.margins.bottom - deltaY, 0, page.height - start.margins.top - 20) });
+        };
+        const stop = () => {
+            window.removeEventListener('mousemove', move);
+            window.removeEventListener('mouseup', stop);
+        };
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', stop);
+    };
+    const marginValue = (side, value) => {
+        const numeric = Number.parseFloat(value);
+        if (!Number.isFinite(numeric)) return;
+        const px = numeric * PRINT_UNITS_PER_INCH;
+        if (side === 'left') updateMargins({ left: clampNumber(px, 0, page.width - margin.right - 20) });
+        if (side === 'right') updateMargins({ right: clampNumber(px, 0, page.width - margin.left - 20) });
+        if (side === 'top') updateMargins({ top: clampNumber(px, 0, page.height - margin.bottom - 20) });
+        if (side === 'bottom') updateMargins({ bottom: clampNumber(px, 0, page.height - margin.top - 20) });
+    };
+    const beginRulerGuide = (orientation, event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const frame = event.currentTarget.closest('.artboard-stage')?.querySelector('.artboard-frame')?.getBoundingClientRect();
+        if (!frame) return;
+        const baseGuide = { label: 'Guide', tone: 'margin' };
+        const updateGuide = (moveEvent) => {
+            const value = orientation === 'vertical'
+                ? Math.round(clampNumber((moveEvent.clientX - frame.left) / scale, 0, page.width))
+                : Math.round(clampNumber((moveEvent.clientY - frame.top) / scale, 0, page.height));
+            const nextGuide = orientation === 'vertical'
+                ? { ...baseGuide, x: value, label: `${formatPrintInches(value)}"` }
+                : { ...baseGuide, y: value, label: `${formatPrintInches(value)}"` };
+            onChange(normalizePrintGuides({
+                ...guides,
+                vertical: orientation === 'vertical' ? [...guides.vertical, nextGuide] : guides.vertical,
+                horizontal: orientation === 'horizontal' ? [...guides.horizontal, nextGuide] : guides.horizontal,
+            }, page.width, page.height));
+        };
+        const move = (moveEvent) => updateGuide(moveEvent);
+        const stop = (upEvent) => {
+            updateGuide(upEvent);
+            window.removeEventListener('mousemove', move);
+            window.removeEventListener('mouseup', stop);
+        };
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', stop);
+    };
+    const updateStoredGuide = (orientation, index, value) => {
+        const key = orientation === 'vertical' ? 'vertical' : 'horizontal';
+        const coordinate = orientation === 'vertical' ? 'x' : 'y';
+        const max = orientation === 'vertical' ? page.width : page.height;
+        const nextValue = Math.round(clampNumber(value, 0, max));
+        onChange(normalizePrintGuides({
+            ...guides,
+            [key]: guides[key].map((guide, guideIndex) => guideIndex === index
+                ? { ...guide, [coordinate]: nextValue, label: guide.tone === 'margin' ? `${formatPrintInches(nextValue)}"` : guide.label }
+                : guide),
+        }, page.width, page.height));
+    };
+    const beginStoredGuideDrag = (orientation, index, event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const frame = event.currentTarget.closest('.artboard-stage')?.querySelector('.artboard-frame')?.getBoundingClientRect();
+        if (!frame) return;
+        const move = (moveEvent) => {
+            const value = orientation === 'vertical'
+                ? (moveEvent.clientX - frame.left) / scale
+                : (moveEvent.clientY - frame.top) / scale;
+            updateStoredGuide(orientation, index, value);
+        };
+        const stop = () => {
+            window.removeEventListener('mousemove', move);
+            window.removeEventListener('mouseup', stop);
+        };
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', stop);
+    };
+    const deleteStoredGuide = (orientation, index, event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const key = orientation === 'vertical' ? 'vertical' : 'horizontal';
+        onChange(normalizePrintGuides({
+            ...guides,
+            [key]: guides[key].filter((_, guideIndex) => guideIndex !== index),
+        }, page.width, page.height));
+    };
+    const verticalGuides = [
+        { id: 'margin-left', x: margin.left, label: `L ${formatPrintInches(margin.left)}"`, tone: 'safe', draggable: 'left' },
+        { id: 'margin-right', x: page.width - margin.right, label: `R ${formatPrintInches(margin.right)}"`, tone: 'safe', draggable: 'right' },
+        ...guides.vertical.map((guide, index) => ({ id: `v-${index}`, x: guide.x, label: guide.label, tone: guide.tone || 'trim', editable: (guide.tone || 'trim') === 'margin', sourceIndex: index })),
+    ];
+    const horizontalGuides = [
+        { id: 'margin-top', y: margin.top, label: `T ${formatPrintInches(margin.top)}"`, tone: 'safe', draggable: 'top' },
+        { id: 'margin-bottom', y: page.height - margin.bottom, label: `B ${formatPrintInches(margin.bottom)}"`, tone: 'safe', draggable: 'bottom' },
+        ...guides.horizontal.map((guide, index) => ({ id: `h-${index}`, y: guide.y, label: guide.label, tone: guide.tone || 'trim', editable: (guide.tone || 'trim') === 'margin', sourceIndex: index })),
+    ];
+
+    return (
+        <div className="print-guides export-ignore" data-export-ignore="true">
+            <div className="print-ruler print-ruler--top" onMouseDown={(event) => beginRulerGuide('horizontal', event)} style={{ width: page.width * scale, '--unit': `${PRINT_UNITS_PER_INCH * scale}px`, '--tick': `${(PRINT_UNITS_PER_INCH * scale) / 10}px` }}>
+                {inchMarksX.map((inch) => <span key={inch} style={{ left: inch * PRINT_UNITS_PER_INCH * scale }}>{inch}</span>)}
+            </div>
+            <div className="print-ruler print-ruler--left" onMouseDown={(event) => beginRulerGuide('vertical', event)} style={{ height: page.height * scale, '--unit': `${PRINT_UNITS_PER_INCH * scale}px`, '--tick': `${(PRINT_UNITS_PER_INCH * scale) / 10}px` }}>
+                {inchMarksY.map((inch) => <span key={inch} style={{ top: inch * PRINT_UNITS_PER_INCH * scale }}>{inch}</span>)}
+            </div>
+            <div className="print-guide-panel">
+                <strong>KDP margins</strong>
+                {['left', 'right', 'top', 'bottom'].map((side) => (
+                    <label key={side}>
+                        <span>{side[0].toUpperCase()}</span>
+                        <input type="number" min="0" step="0.01" value={formatPrintInches(margin[side])} onChange={(event) => marginValue(side, event.target.value)} />
+                    </label>
+                ))}
+            </div>
+            {verticalGuides.map((guide) => (
+                <div key={guide.id} className={`print-guide-line print-guide-line--vertical tone-${guide.tone} ${guide.editable ? 'is-editable' : ''}`} style={{ left: guide.x * scale, height: page.height * scale }}>
+                    <span>{guide.label}{guide.editable && <button type="button" className="print-guide-delete" onClick={(event) => deleteStoredGuide('vertical', guide.sourceIndex, event)} title="Delete guide"><X size={9} /></button>}</span>
+                    {guide.draggable && <button type="button" className="print-guide-drag" onMouseDown={(event) => beginMarginDrag(guide.draggable, event)} title="Drag margin guide" />}
+                    {guide.editable && <button type="button" className="print-guide-drag" onMouseDown={(event) => beginStoredGuideDrag('vertical', guide.sourceIndex, event)} title="Drag guide" />}
+                </div>
+            ))}
+            {horizontalGuides.map((guide) => (
+                <div key={guide.id} className={`print-guide-line print-guide-line--horizontal tone-${guide.tone} ${guide.editable ? 'is-editable' : ''}`} style={{ top: guide.y * scale, width: page.width * scale }}>
+                    <span>{guide.label}{guide.editable && <button type="button" className="print-guide-delete" onClick={(event) => deleteStoredGuide('horizontal', guide.sourceIndex, event)} title="Delete guide"><X size={9} /></button>}</span>
+                    {guide.draggable && <button type="button" className="print-guide-drag" onMouseDown={(event) => beginMarginDrag(guide.draggable, event)} title="Drag margin guide" />}
+                    {guide.editable && <button type="button" className="print-guide-drag" onMouseDown={(event) => beginStoredGuideDrag('horizontal', guide.sourceIndex, event)} title="Drag guide" />}
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function ArtboardFrame({ page, onPrintGuidesChange, children }) {
     const workspaceRef = useRef(null);
     const [workspaceSize, setWorkspaceSize] = useState({ width: 1200, height: 760 });
     useEffect(() => {
@@ -845,20 +1416,23 @@ function ArtboardFrame({ page, children }) {
     return (
         <div className="artboard-workspace" ref={workspaceRef}>
             <div className="artboard-label">{page.name} <span>{page.width} × {page.height} px</span></div>
-            <section className="artboard-frame" style={{
-                width: page.width * scale, height: page.height * scale,
-                backgroundImage: page.backgroundImage ? `url("${page.backgroundImage}")` : undefined,
-                backgroundSize: page.backgroundFit || 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat',
-            }}>
-                <div className="artboard-paper-pattern" style={paperBackgroundStyle(page.paperStyle, scale)} aria-hidden="true" />
-                {page.showTopBox && <div className="artboard-top-box" style={{ height: TOP_BOX_HEIGHT * scale, borderWidth: Math.max(0.65, scale) }} aria-hidden="true" />}
-                {children}
-            </section>
+            <div className={`artboard-stage ${page.printGuides?.enabled && page.printGuides?.visible !== false ? 'has-print-guides' : ''}`} style={{ width: page.width * scale, height: page.height * scale }}>
+                <section className="artboard-frame" style={{
+                    width: page.width * scale, height: page.height * scale,
+                    backgroundImage: page.backgroundImage ? `url("${page.backgroundImage}")` : undefined,
+                    backgroundSize: page.backgroundFit || 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat',
+                }} data-page-scale={scale}>
+                    <div className="artboard-paper-pattern" style={paperBackgroundStyle(page.paperStyle, scale)} aria-hidden="true" />
+                    {page.showTopBox && <div className="artboard-top-box" style={{ height: TOP_BOX_HEIGHT * scale, borderWidth: Math.max(0.65, scale) }} aria-hidden="true" />}
+                    {children}
+                </section>
+                {page.printGuides?.enabled && <PrintRulers page={page} scale={scale} onChange={onPrintGuidesChange} />}
+            </div>
         </div>
     );
 }
 
-function EditorCanvas({ diagram }) {
+function EditorCanvas({ diagram, restoreDraft }) {
     const flow = useReactFlow();
     const { auth } = usePage().props;
     const draftStorageKey = `flowcraft-diagram:${auth?.user?.id || 'anonymous'}`;
@@ -884,6 +1458,7 @@ function EditorCanvas({ diagram }) {
     const activePage = pages.find((page) => page.id === activePageId) || pages[0];
     const nodes = activePage?.nodes || [];
     const edges = activePage?.edges || [];
+    const activePageIsPrintCanvas = Boolean(activePage?.printGuides?.enabled);
 
     const rememberPageViewport = useCallback((page, viewport) => {
         const flowElement = wrapperRef.current?.querySelector('.react-flow');
@@ -908,20 +1483,32 @@ function EditorCanvas({ diagram }) {
 
     useEffect(() => {
         const timer = setTimeout(() => {
+            if (activePage?.printGuides?.enabled) {
+                restorePageViewport(activePage, { x: 0, y: 0, zoom: 1 });
+                return;
+            }
             const viewport = pageViewports.current.get(activePage?.id);
             if (!restorePageViewport(activePage, viewport)) flow.fitView({ padding: 0.2, duration: 260, maxZoom: 1.05 });
         }, 40);
         return () => clearTimeout(timer);
-    }, [canvasExpanded, activePageId, flow, restorePageViewport]);
+    }, [canvasExpanded, activePageId, activePage?.width, activePage?.height, activePage?.printGuides?.enabled, flow, restorePageViewport]);
 
     useEffect(() => {
-        const restoreOnEscape = (event) => { if (event.key === 'Escape') setCanvasExpanded(false); };
-        window.addEventListener('keydown', restoreOnEscape);
-        return () => window.removeEventListener('keydown', restoreOnEscape);
+        const syncFullscreenState = () => setCanvasExpanded(document.fullscreenElement === wrapperRef.current);
+        document.addEventListener('fullscreenchange', syncFullscreenState);
+        return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
     }, []);
 
     const toggleCanvasExpanded = useCallback(() => {
-        rememberPageViewport(activePage, flow.getViewport());
+        if (!activePage?.printGuides?.enabled) rememberPageViewport(activePage, flow.getViewport());
+        if (document.fullscreenElement === wrapperRef.current) {
+            document.exitFullscreen?.().catch(() => setCanvasExpanded(false));
+            return;
+        }
+        if (wrapperRef.current?.requestFullscreen) {
+            wrapperRef.current.requestFullscreen().then(() => setCanvasExpanded(true)).catch(() => setCanvasExpanded((value) => !value));
+            return;
+        }
         setCanvasExpanded((value) => !value);
     }, [activePage, flow, rememberPageViewport]);
 
@@ -935,6 +1522,10 @@ function EditorCanvas({ diagram }) {
 
     useEffect(() => {
         if (diagram) return;
+        if (!restoreDraft) {
+            localStorage.removeItem(draftStorageKey);
+            return;
+        }
         try {
             const stored = JSON.parse(localStorage.getItem(draftStorageKey));
             if (stored?.pages?.length || (stored?.nodes && stored?.edges)) {
@@ -948,7 +1539,7 @@ function EditorCanvas({ diagram }) {
         } catch (error) {
             console.warn('Saved diagram could not be loaded.', error);
         }
-    }, [diagram, draftStorageKey]);
+    }, [diagram, draftStorageKey, restoreDraft]);
 
     const nodeTypes = useMemo(() => ({ workflow: MemoWorkflowNode }), []);
     const edgeTypes = useMemo(() => ({ workflowEdge: MemoWorkflowEdge }), []);
@@ -1015,12 +1606,20 @@ function EditorCanvas({ diagram }) {
     const undo = useCallback(() => {
         if (!history.length) return;
         const previous = history[history.length - 1];
+        if (!previous?.pages) {
+            setHistory((items) => items.slice(0, -1));
+            return;
+        }
         setFuture((items) => [snapshot(), ...items]); setHistory((items) => items.slice(0, -1));
         setPages(previous.pages); setActivePageId(previous.activePageId); setSaved(false);
     }, [history, snapshot]);
     const redo = useCallback(() => {
         if (!future.length) return;
         const next = future[0];
+        if (!next?.pages) {
+            setFuture((items) => items.slice(1));
+            return;
+        }
         setHistory((items) => [...items, snapshot()]); setFuture((items) => items.slice(1));
         setPages(next.pages); setActivePageId(next.activePageId); setSaved(false);
     }, [future, snapshot]);
@@ -1036,6 +1635,26 @@ function EditorCanvas({ diagram }) {
         setPages((items) => [...items, page]);
         setActivePageId(page.id); setSelectedNodeId(null); setSelectedEdgeId(null);
     }, [pages.length, remember]);
+    const applyTemplate = useCallback((template) => {
+        const hasContent = nodes.length > 0 || edges.length > 0;
+        if (hasContent && !window.confirm('Replace the current page with this template? This can be undone.')) return;
+        remember();
+        const pageIndex = Math.max(0, pages.findIndex((page) => page.id === activePageId));
+        const templatePage = buildTemplatePage(template, pageIndex + 1);
+        pageViewports.current.delete(activePageId);
+        if (template.printGuides?.enabled) pageViewports.current.set(activePageId, { x: 0, y: 0, zoom: 1 });
+        setPages((items) => items.map((page) => page.id === activePageId ? { ...templatePage, id: page.id } : page));
+        setSelectedNodeId(null); setSelectedEdgeId(null);
+        if (!diagram || ['Website architecture', 'Untitled workflow'].includes(title)) {
+            setTitle(template.title);
+            setFilename(slugify(template.title));
+        }
+        setSaved(false);
+        window.setTimeout(() => {
+            if (template.printGuides?.enabled) restorePageViewport({ ...templatePage, id: activePageId }, { x: 0, y: 0, zoom: 1 });
+            else flow.fitView({ padding: 0.2, duration: 260, maxZoom: 1.05 });
+        }, 60);
+    }, [nodes.length, edges.length, remember, pages, activePageId, diagram, title, flow, restorePageViewport]);
     const duplicatePage = useCallback(() => {
         remember();
         const suffix = `-${Date.now()}`;
@@ -1045,6 +1664,7 @@ function EditorCanvas({ diagram }) {
             backgroundImage: activePage.backgroundImage, backgroundName: activePage.backgroundName, backgroundFit: activePage.backgroundFit, backgroundType: activePage.backgroundType,
             paperStyle: activePage.paperStyle || 'plain',
             showTopBox: Boolean(activePage.showTopBox),
+            printGuides: activePage.printGuides ? normalizePrintGuides(activePage.printGuides, activePage.width, activePage.height) : null,
             ...(viewport ? { viewport } : {}),
             nodes: activePage.nodes.map((node) => ({ ...node, id: `${node.id}${suffix}` })),
             edges: activePage.edges.map((edge) => ({ ...edge, id: `${edge.id}${suffix}`, source: `${edge.source}${suffix}`, target: `${edge.target}${suffix}` })),
@@ -1073,6 +1693,17 @@ function EditorCanvas({ diagram }) {
     const updatePageBackground = useCallback((patch) => {
         remember();
         setPages((items) => items.map((page) => page.id === activePageId ? { ...page, ...patch } : page));
+    }, [activePageId, remember]);
+    const updatePagePrintGuides = useCallback((printGuides) => {
+        setPages((items) => items.map((page) => page.id === activePageId ? { ...page, printGuides: normalizePrintGuides(printGuides, page.width, page.height) } : page));
+        setSaved(false);
+    }, [activePageId]);
+    const togglePagePrintGuides = useCallback((visible) => {
+        remember();
+        setPages((items) => items.map((page) => page.id === activePageId && page.printGuides?.enabled
+            ? { ...page, printGuides: { ...page.printGuides, visible } }
+            : page));
+        setSaved(false);
     }, [activePageId, remember]);
     const beginResize = useCallback(() => { dragStart.current = snapshot(); }, [snapshot]);
     const endResize = useCallback(() => {
@@ -1120,6 +1751,10 @@ function EditorCanvas({ diagram }) {
         const onKeyDown = (event) => {
             const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
             if ((event.key === 'Delete' || event.key === 'Backspace') && !typing) deleteSelection();
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r' && activePage?.printGuides?.enabled && !typing) {
+                event.preventDefault();
+                togglePagePrintGuides(activePage.printGuides.visible === false);
+            }
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) { event.preventDefault(); undo(); }
             if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) { event.preventDefault(); redo(); }
             if ((event.ctrlKey || event.metaKey) && selectedNodeId && (event.key === '[' || event.key === ']')) {
@@ -1129,7 +1764,7 @@ function EditorCanvas({ diagram }) {
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [deleteSelection, undo, redo, selectedNodeId, moveLayer]);
+    }, [activePage, deleteSelection, undo, redo, selectedNodeId, moveLayer, togglePagePrintGuides]);
 
     const uploadAsset = async (file, targetNodeId = null) => {
         if (!file) return;
@@ -1194,7 +1829,7 @@ function EditorCanvas({ diagram }) {
                 : `mutation CreateDiagram($input: DiagramInput!) { createDiagram(input: $input) { id } }`;
             const result = await graphqlRequest(operation, diagram ? { id: diagram.id, input } : { input });
             const savedDiagram = diagram ? result.updateDiagram : result.createDiagram;
-            localStorage.setItem(draftStorageKey, JSON.stringify({ title, filename: cleanFilename, nodes, edges, pages: savedPages }));
+            localStorage.removeItem(draftStorageKey);
             setFilename(cleanFilename);
             setSaved(true);
             if (!diagram && savedDiagram?.id) window.location.assign(route('diagrams.edit', savedDiagram.id));
@@ -1251,10 +1886,8 @@ function EditorCanvas({ diagram }) {
             const height = page.height || DEFAULT_PAGE_SIZE.height;
             const pageNodeIds = new Set(page.nodes.map((node) => node.id));
             const renderedNodes = flow.getNodes().filter((node) => pageNodeIds.has(node.id));
-            const viewport = pageViewports.current.get(page.id) || (() => {
-                rememberPageViewport(page, flow.getViewport());
-                return pageViewports.current.get(page.id);
-            })() || { x: 0, y: 0, zoom: 1 };
+            const viewport = { x: 0, y: 0, zoom: 1 };
+            const rasterScale = targetFormat === 'pdf' ? PDF_RASTER_SCALE : 1;
             if (document.fonts?.ready) await document.fonts.ready;
             let fontEmbedCSS = '';
             try {
@@ -1267,7 +1900,7 @@ function EditorCanvas({ diagram }) {
                 console.warn('Export font embedding could not be completed; loaded fonts will still be rendered.', error);
             }
             const vectorItems = [];
-            if (targetFormat === 'pdf') {
+            if (targetFormat === 'pdf' && !FLATTEN_PDF_EXPORT) {
                 const renderedById = new Map(renderedNodes.map((node) => [node.id, node]));
                 const candidates = page.nodes.filter((node) => (node.data?.kind === 'image' || node.data?.shape === 'image')
                     && node.data?.imageUrl && isSvgAsset(node.data.imageUrl, node.data.mediaType));
@@ -1287,10 +1920,11 @@ function EditorCanvas({ diagram }) {
             }
             const vectorNodeIds = new Set(vectorItems.map(({ node }) => node.id));
             const captureOptions = {
-                width, height, pixelRatio: 1,
+                width, height, pixelRatio: rasterScale,
                 fontEmbedCSS,
                 style: { width: `${width}px`, height: `${height}px`, transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` },
                 filter: (element) => {
+                    if (element?.closest?.('.export-ignore, [data-export-ignore="true"]')) return false;
                     if (element?.classList?.contains('react-flow__resize-control') || element?.classList?.contains('workflow-handle')) return false;
                     if (targetFormat === 'pdf' && element?.classList?.contains('workflow-node__page-image')) {
                         const nodeId = element.closest?.('.react-flow__node')?.getAttribute('data-id');
@@ -1320,8 +1954,10 @@ function EditorCanvas({ diagram }) {
                 });
             }
             const composePage = (contentCanvas) => {
-                const output = document.createElement('canvas'); output.width = width; output.height = height;
-                const context = output.getContext('2d'); context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height);
+                const output = document.createElement('canvas'); output.width = Math.round(width * rasterScale); output.height = Math.round(height * rasterScale);
+                const context = output.getContext('2d');
+                context.scale(rasterScale, rasterScale);
+                context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height);
                 if (backgroundImage) {
                     if ((page.backgroundFit || 'cover') === 'fill') context.drawImage(backgroundImage, 0, 0, width, height);
                     else {
@@ -1390,6 +2026,7 @@ function EditorCanvas({ diagram }) {
                         const overlayCanvas = await toCanvas(viewportElement, {
                             ...captureOptions,
                             filter: (element) => {
+                                if (element?.closest?.('.export-ignore, [data-export-ignore="true"]')) return false;
                                 if (element?.classList?.contains('react-flow__resize-control') || element?.classList?.contains('workflow-handle')) return false;
                                 if (element?.classList?.contains('react-flow__edges')) return false;
                                 if (element?.classList?.contains('react-flow__node')) return overlayNodeIds.has(element.getAttribute('data-id'));
@@ -1422,10 +2059,11 @@ function EditorCanvas({ diagram }) {
             }
             if (format === 'pdf') {
                 const first = captures[0].page;
-                const pdf = new jsPDF({ orientation: first.width >= first.height ? 'landscape' : 'portrait', unit: 'px', format: [first.width, first.height], hotfixes: ['px_scaling'] });
+                const pageFormat = [first.width / PRINT_UNITS_PER_INCH, first.height / PRINT_UNITS_PER_INCH];
+                const pdf = new jsPDF({ orientation: first.width >= first.height ? 'landscape' : 'portrait', unit: 'in', format: pageFormat, compress: true });
                 for (let index = 0; index < captures.length; index += 1) {
                     const { page, blob } = captures[index];
-                    if (index) pdf.addPage([page.width, page.height], page.width >= page.height ? 'landscape' : 'portrait');
+                    if (index) pdf.addPage([page.width / PRINT_UNITS_PER_INCH, page.height / PRINT_UNITS_PER_INCH], page.width >= page.height ? 'landscape' : 'portrait');
                     const dataUrl = await new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(blob); });
                     const pdfWidth = pdf.internal.pageSize.getWidth();
                     const pdfHeight = pdf.internal.pageSize.getHeight();
@@ -1492,6 +2130,17 @@ function EditorCanvas({ diagram }) {
                         {editingTitle ? <input value={title} autoFocus onChange={(event) => { setTitle(event.target.value); setSaved(false); }} onBlur={() => setEditingTitle(false)} onKeyDown={(event) => event.key === 'Enter' && setEditingTitle(false)} /> : <button onClick={() => setEditingTitle(true)}>{title}</button>}
                         <span><i className={saved ? 'saved-dot' : 'unsaved-dot'} /> {saved ? 'Saved to dashboard' : 'Unsaved changes'}</span>
                     </div>
+                    <PageControls
+                        page={activePage} onResize={resizePage}
+                        onAddImage={uploadAsset} onImportBackground={uploadPageBackground} importing={uploading}
+                        onBackgroundFit={(backgroundFit) => updatePageBackground({ backgroundFit })}
+                        onRemoveBackground={() => updatePageBackground({ backgroundImage: null, backgroundName: null, backgroundType: null })}
+                        onPaperStyle={(paperStyle) => updatePageBackground({ paperStyle })}
+                        onTopBox={(showTopBox) => updatePageBackground({ showTopBox })}
+                        onFitView={() => activePageIsPrintCanvas ? restorePageViewport(activePage, { x: 0, y: 0, zoom: 1 }) : flow.fitView({ padding: 0.25, duration: 300 })}
+                        onTogglePrintGuides={togglePagePrintGuides}
+                        expanded={canvasExpanded} onToggleExpanded={toggleCanvasExpanded}
+                    />
                     <div className="header-actions">
                         <ToolButton icon={Undo2} label="Undo" onClick={undo} disabled={!history.length} /><ToolButton icon={Redo2} label="Redo" onClick={redo} disabled={!future.length} />
                         <span className="toolbar-divider" /><button type="button" className="save-button" onClick={saveDiagram} disabled={saving}><Save size={16} /> {saving ? 'Saving...' : 'Save'}</button>
@@ -1504,19 +2153,10 @@ function EditorCanvas({ diagram }) {
                         onAddNode={addNodeFromSidebar} onUpload={uploadAsset} uploading={uploading}
                         collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} nodes={nodes}
                         selectedNodeId={selectedNodeId} onSelectNode={(id) => { setSelectedNodeId(id); setSelectedEdgeId(null); }}
-                        onMoveLayer={moveLayer} onReorderLayer={reorderLayer}
+                        onMoveLayer={moveLayer} onReorderLayer={reorderLayer} onApplyTemplate={applyTemplate}
                     />
                     <main className={`canvas-shell ${canvasExpanded ? 'is-expanded' : ''}`} ref={wrapperRef}>
-                        <PageControls
-                            page={activePage} elementCount={nodes.length} onResize={resizePage}
-                            onAddImage={uploadAsset} onImportBackground={uploadPageBackground} importing={uploading}
-                            onBackgroundFit={(backgroundFit) => updatePageBackground({ backgroundFit })}
-                            onRemoveBackground={() => updatePageBackground({ backgroundImage: null, backgroundName: null, backgroundType: null })}
-                            onPaperStyle={(paperStyle) => updatePageBackground({ paperStyle })}
-                            onTopBox={(showTopBox) => updatePageBackground({ showTopBox })}
-                            expanded={canvasExpanded} onToggleExpanded={toggleCanvasExpanded}
-                        />
-                        <ArtboardFrame page={activePage}><ReactFlow
+                        <ArtboardFrame page={activePage} onPrintGuidesChange={updatePagePrintGuides}><ReactFlow
                             key={activePage.id}
                             nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
                             onNodesChange={(changes) => setNodes((items) => applyNodeChanges(changes, items))}
@@ -1528,21 +2168,24 @@ function EditorCanvas({ diagram }) {
                             onEdgeClick={(_, item) => { setSelectedEdgeId(item.id); setSelectedNodeId(null); }}
                             onPaneClick={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }}
                             onInit={(instance) => {
+                                if (activePage.printGuides?.enabled) {
+                                    requestAnimationFrame(() => restorePageViewport(activePage, { x: 0, y: 0, zoom: 1 }, instance));
+                                    return;
+                                }
                                 const viewport = pageViewports.current.get(activePage.id);
                                 if (viewport) requestAnimationFrame(() => restorePageViewport(activePage, viewport, instance));
                             }}
-                            onMoveEnd={(_, viewport) => rememberPageViewport(activePage, viewport)}
+                            onMoveEnd={(_, viewport) => {
+                                if (activePage.printGuides?.enabled) return;
+                                rememberPageViewport(activePage, viewport);
+                            }}
                             onDrop={onDrop} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
                             connectionMode={ConnectionMode.Loose} connectionLineStyle={{ stroke: '#6d5dfc', strokeWidth: 2.5, strokeDasharray: '8 7' }}
-                            minZoom={0.25} maxZoom={2.5} fitView={!pageViewports.current.has(activePage.id)} fitViewOptions={{ padding: 0.24, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }} elevateNodesOnSelect={false}
+                            minZoom={0.25} maxZoom={2.5} fitView={!activePageIsPrintCanvas && !pageViewports.current.has(activePage.id)} fitViewOptions={{ padding: 0.24, maxZoom: 1.05 }}
+                            panOnDrag={!activePageIsPrintCanvas} zoomOnScroll={!activePageIsPrintCanvas} zoomOnPinch={!activePageIsPrintCanvas} zoomOnDoubleClick={!activePageIsPrintCanvas}
+                            proOptions={{ hideAttribution: true }} elevateNodesOnSelect={false}
                         >
-                            {(activePage.paperStyle || 'plain') === 'plain' && <Background color="#d8d8dd" gap={22} size={1.1} />}<Controls position="bottom-left" showInteractive={false} />
-                            <MiniMap position="bottom-right" pannable zoomable nodeColor={(node) => node.data.color.value} maskColor="rgba(247,247,248,.78)" />
-                            <Panel position="top-center" className="canvas-toolbar">
-                                <ToolButton icon={MousePointer2} label="Select" active /><ToolButton icon={Type} label="Add rich text" onClick={() => addNodeFromSidebar('text', { label: 'Start typing' })} />
-                                <ToolButton icon={MessageSquareText} label="Add note" onClick={() => addNodeFromSidebar('document', { label: 'Add a note' })} /><span className="toolbar-divider" />
-                                <ToolButton icon={Grid2X2} label="Fit view" onClick={() => flow.fitView({ padding: 0.25, duration: 300 })} />
-                            </Panel>
+                            {(activePage.paperStyle || 'plain') === 'plain' && !activePageIsPrintCanvas && <Background color="#d8d8dd" gap={22} size={1.1} />}
                         </ReactFlow></ArtboardFrame>
                         <PropertiesPanel selectedNode={selectedNode} selectedEdge={selectedEdge} onUpdateNode={updateNode} onUpdateEdge={updateEdge} onUpload={uploadAsset} uploading={uploading} onMoveLayer={moveLayer} onDelete={deleteSelection} onClose={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }} />
                         <PagesBar pages={pages} activePageId={activePageId} onSelect={selectPage} onAdd={addPage} onDuplicate={duplicatePage} onRename={renamePage} onDelete={deletePage} />
@@ -1553,6 +2196,6 @@ function EditorCanvas({ diagram }) {
     );
 }
 
-export default function DiagramEditor({ diagram = null }) {
-    return <ReactFlowProvider><EditorCanvas diagram={diagram} /></ReactFlowProvider>;
+export default function DiagramEditor({ diagram = null, restoreDraft = true }) {
+    return <ReactFlowProvider><EditorCanvas diagram={diagram} restoreDraft={restoreDraft} /></ReactFlowProvider>;
 }
