@@ -104,7 +104,7 @@ const FONT_FAMILIES = [
     { label: 'Lora', value: 'Lora Variable', stack: "'Lora Variable', serif" },
     { label: 'Playfair Display', value: 'Playfair Display Variable', stack: "'Playfair Display Variable', serif" },
     { label: 'Source Code Pro', value: 'Source Code Pro Variable', stack: "'Source Code Pro Variable', monospace" },
-    { label: 'Great Vibes', value: 'Great Vibes', stack: "'Great Vibes', cursive" },
+    { label: 'Great Vibes', value: 'Great Vibes', stack: "'Great Vibes', cursive", singleWeight: 400 },
     { label: 'Dancing Script', value: 'Dancing Script Variable', stack: "'Dancing Script Variable', cursive" },
     { label: 'Cabin Sketch', value: 'Cabin Sketch', stack: "'Cabin Sketch', cursive" },
     { label: 'Henny Penny', value: 'Henny Penny', stack: "'Henny Penny', cursive" },
@@ -122,6 +122,11 @@ const FONT_FAMILIES = [
 function fontStack(fontFamily = 'DM Sans Variable') {
     const legacyFamily = fontFamily === 'DM Sans' ? 'DM Sans Variable' : fontFamily === 'Manrope' ? 'Manrope Variable' : fontFamily;
     return FONT_FAMILIES.find((font) => font.value === legacyFamily)?.stack || FONT_FAMILIES[0].stack;
+}
+
+function singleWeightFontWeight(fontFamily = 'DM Sans Variable') {
+    const legacyFamily = fontFamily === 'DM Sans' ? 'DM Sans Variable' : fontFamily === 'Manrope' ? 'Manrope Variable' : fontFamily;
+    return FONT_FAMILIES.find((font) => font.value === legacyFamily)?.singleWeight || null;
 }
 
 function sameStringArray(first = [], second = []) {
@@ -394,6 +399,28 @@ function insertEditorLineBreak(event, editor, onInsert) {
 
 function isSvgAsset(url = '', type = '') {
     return type.toLowerCase() === 'svg' || /\.svg(?:[?#]|$)/i.test(url);
+}
+
+async function waitForExportFonts(page) {
+    if (!document.fonts?.load) return;
+
+    const samplesByFont = new Map();
+    (page.nodes || []).forEach((node) => {
+        if (node.data?.kind === 'image' || node.data?.shape === 'image') return;
+        const fontFamily = node.data?.fontFamily || 'DM Sans Variable';
+        const sample = plainText(node.data?.richText || node.data?.label || '').trim() || 'Workflow export';
+        samplesByFont.set(fontFamily, `${samplesByFont.get(fontFamily) || ''} ${sample}`.trim());
+    });
+
+    const loads = [...samplesByFont.entries()].flatMap(([fontFamily, sample]) => {
+        const stack = fontStack(fontFamily);
+        const weights = new Set([singleWeightFontWeight(fontFamily) || 400, 500, 700]);
+        return [...weights].map((weight) => document.fonts.load(`${weight} 32px ${stack}`, sample.slice(0, 96)));
+    });
+
+    await Promise.allSettled(loads);
+    if (document.fonts.ready) await document.fonts.ready;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 
 function withCsrf(headers = {}) {
@@ -882,6 +909,13 @@ function WorkflowNode({ id, data, selected, width, height }) {
     const backgroundColor = data.backgroundColor || (isPageImage || data.shape === 'text' ? 'transparent' : '#ffffff');
     const showHandles = !data.disableHandles && !data.isGuide;
     const opacity = Math.max(0, Math.min(1, Number(data.opacity ?? 1)));
+    const singleWeightFont = singleWeightFontWeight(data.fontFamily);
+    const textFontStyle = {
+        color: data.textColor || undefined,
+        fontSize: data.fontSize ? `${data.fontSize}px` : undefined,
+        fontFamily: fontStack(data.fontFamily),
+        fontWeight: singleWeightFont || undefined,
+    };
 
     useEffect(() => { const value = data.richText || data.label; setDraft(value); draftRef.current = value; }, [data.label, data.richText]);
     const finishEditing = () => {
@@ -892,7 +926,7 @@ function WorkflowNode({ id, data, selected, width, height }) {
 
     return (
         <div
-            className={`workflow-node workflow-node--${data.shape} ${data.isGuide ? 'is-guide' : ''} ${data.hideBorder ? 'has-hidden-border' : ''} ${showShadow ? 'has-shadow' : ''} ${selected ? 'is-selected' : ''}`}
+            className={`workflow-node workflow-node--${data.shape} ${singleWeightFont ? 'uses-single-weight-font' : ''} ${data.isGuide ? 'is-guide' : ''} ${data.hideBorder ? 'has-hidden-border' : ''} ${showShadow ? 'has-shadow' : ''} ${selected ? 'is-selected' : ''}`}
             style={{ '--node-color': data.color.value, '--node-soft': data.color.soft, backgroundColor, width: width || undefined, height: height || undefined, fontFamily: fontStack(data.fontFamily), opacity }}
             onDoubleClick={(event) => { if (!isPageImage) { event.stopPropagation(); setEditing(true); } }}
         >
@@ -914,7 +948,7 @@ function WorkflowNode({ id, data, selected, width, height }) {
                         <div
                             className="workflow-node__rich-input nodrag nowheel" contentEditable suppressContentEditableWarning autoFocus dir="auto"
                             dangerouslySetInnerHTML={{ __html: draft }}
-                            style={{ color: data.textColor || undefined, fontSize: data.fontSize ? `${data.fontSize}px` : undefined, fontFamily: fontStack(data.fontFamily) }}
+                            style={textFontStyle}
                             onInput={(event) => { draftRef.current = event.currentTarget.innerHTML; }} onBlur={finishEditing}
                             onKeyDown={(event) => {
                                 if (event.key === 'Escape') { const value = data.richText || data.label; draftRef.current = value; setDraft(value); setEditing(false); }
@@ -922,7 +956,7 @@ function WorkflowNode({ id, data, selected, width, height }) {
                                 event.stopPropagation();
                             }}
                         />
-                    ) : <div className="workflow-node__label rich-content" dir="auto" style={{ color: data.textColor || undefined, fontSize: data.fontSize ? `${data.fontSize}px` : undefined, fontFamily: fontStack(data.fontFamily) }} dangerouslySetInnerHTML={{ __html: cleanRichText(data.richText || data.label) }} />}
+                    ) : <div className="workflow-node__label rich-content" dir="auto" style={textFontStyle} dangerouslySetInnerHTML={{ __html: cleanRichText(data.richText || data.label) }} />}
                 </>}
             </div>
         </div>
@@ -1082,6 +1116,7 @@ function RichTextControl({ node, onChange }) {
     const editorRef = useRef(null);
     const [draft, setDraft] = useState(node.data.richText || node.data.label || '');
     const draftRef = useRef(draft);
+    const singleWeightFont = singleWeightFontWeight(node.data.fontFamily);
 
     useEffect(() => { const value = node.data.richText || node.data.label || ''; setDraft(value); draftRef.current = value; }, [node.id, node.data.richText, node.data.label]);
 
@@ -1112,7 +1147,7 @@ function RichTextControl({ node, onChange }) {
         </div>
         <div
             ref={editorRef} className="rich-editor" contentEditable suppressContentEditableWarning dir="auto"
-            style={{ fontFamily: fontStack(node.data.fontFamily) }}
+            style={{ fontFamily: fontStack(node.data.fontFamily), fontWeight: singleWeightFont || undefined }}
             dangerouslySetInnerHTML={{ __html: draft }} onInput={(event) => { draftRef.current = event.currentTarget.innerHTML; }}
             onKeyDown={(event) => {
                 insertEditorLineBreak(event, event.currentTarget, (value) => { draftRef.current = value; });
@@ -2109,7 +2144,7 @@ function EditorCanvas({ diagram, restoreDraft }) {
             const renderedNodes = flow.getNodes().filter((node) => pageNodeIds.has(node.id));
             const viewport = { x: 0, y: 0, zoom: 1 };
             const rasterScale = targetFormat === 'pdf' ? PDF_RASTER_SCALE : 1;
-            if (document.fonts?.ready) await document.fonts.ready;
+            await waitForExportFonts(page);
             let fontEmbedCSS = '';
             try {
                 const [staticFonts, variableFonts] = await Promise.all([

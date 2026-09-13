@@ -38,9 +38,11 @@ class DiagramAssetService
 
     public function sanitizeSvg(string $svg): string
     {
-        if (preg_match('/<!DOCTYPE|<!ENTITY/i', $svg)) {
-            throw ValidationException::withMessages(['asset' => 'SVG document types and entities are not supported.']);
+        if (preg_match('/<!ENTITY/i', $svg)) {
+            throw ValidationException::withMessages(['asset' => 'SVG entities are not supported.']);
         }
+
+        $svg = $this->stripSvgDoctype($svg);
 
         $previous = libxml_use_internal_errors(true);
         $document = new DOMDocument;
@@ -55,6 +57,11 @@ class DiagramAssetService
         $this->sanitizeSvgElement($document->documentElement);
 
         return $document->saveXML($document->documentElement);
+    }
+
+    private function stripSvgDoctype(string $svg): string
+    {
+        return preg_replace('/<!DOCTYPE\b(?:[^>"\'\[]+|"[^"]*"|\'[^\']*\')*(?:\[(?:[^\]]|\](?!\s*>))*\]\s*)?>/is', '', $svg) ?? $svg;
     }
 
     private function sanitizeSvgElement(DOMElement $element): void

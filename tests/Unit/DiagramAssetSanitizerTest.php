@@ -51,7 +51,24 @@ class DiagramAssetSanitizerTest extends TestCase
     }
 
     #[Test]
-    public function it_rejects_document_type_declarations(): void
+    public function it_removes_plain_document_type_declarations(): void
+    {
+        $svg = <<<'SVG'
+        <?xml version="1.0" encoding="utf-8"?>
+        <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+            <rect width="20" height="20"/>
+        </svg>
+        SVG;
+
+        $result = $this->sanitize($svg);
+
+        $this->assertStringContainsString('<svg', $result);
+        $this->assertStringNotContainsString('<!DOCTYPE', $result);
+    }
+
+    #[Test]
+    public function it_rejects_entity_declarations(): void
     {
         $this->expectException(ValidationException::class);
 
