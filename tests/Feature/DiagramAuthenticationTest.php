@@ -41,6 +41,34 @@ class DiagramAuthenticationTest extends TestCase
         ]);
     }
 
+    public function test_graphql_accepts_pages_without_nodes_or_edges(): void
+    {
+        $user = User::factory()->create();
+        $input = $this->diagramInput('Empty page');
+        $input['pages'] = [[
+            'id' => 'page-1',
+            'name' => 'Page 1',
+            'width' => 1200,
+            'height' => 760,
+            'nodes' => [],
+            'edges' => [],
+        ]];
+
+        $response = $this->actingAs($user)->postJson('/graphql', [
+            'query' => <<<'GRAPHQL'
+                mutation CreateDiagram($input: DiagramInput!) {
+                    createDiagram(input: $input) { id pages }
+                }
+                GRAPHQL,
+            'variables' => ['input' => $input],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonMissingPath('errors')
+            ->assertJsonPath('data.createDiagram.pages.0.nodes', [])
+            ->assertJsonPath('data.createDiagram.pages.0.edges', []);
+    }
+
     public function test_users_only_receive_their_own_assigned_diagrams(): void
     {
         $user = User::factory()->create();

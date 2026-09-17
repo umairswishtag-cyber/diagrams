@@ -633,6 +633,25 @@ function LayerControls({ node, onMoveLayer }) {
     </div>;
 }
 
+function AlignmentPanel({ count, onAlign, onClose }) {
+    return (
+        <aside className="properties-panel selection-panel">
+            <div className="properties-title">
+                <div><span>ARRANGE</span><strong>{count} shapes selected</strong></div>
+                <button onClick={onClose} aria-label="Clear selection"><X size={17} /></button>
+            </div>
+            <span className="field-label">Align selection</span>
+            <div className="alignment-grid">
+                <button type="button" onClick={() => onAlign('left')} title="Align left edges"><AlignLeft size={17} /><span>Left</span></button>
+                <button type="button" onClick={() => onAlign('right')} title="Align right edges"><AlignRight size={17} /><span>Right</span></button>
+                <button type="button" onClick={() => onAlign('top')} title="Align top edges"><PanelTop size={17} /><span>Top</span></button>
+                <button type="button" onClick={() => onAlign('bottom')} title="Align bottom edges"><PanelBottom size={17} /><span>Bottom</span></button>
+            </div>
+            <p className="selection-help">Hold Shift, Ctrl, or Cmd while clicking to select more shapes.</p>
+        </aside>
+    );
+}
+
 function PropertiesPanel({ selectedNode, selectedEdge, onUpdateNode, onUpdateEdge, onUpload, uploading, onMoveLayer, onDelete, onClose }) {
     if (!selectedNode && !selectedEdge) return null;
     const isImage = selectedNode && (selectedNode.data.kind === 'image' || selectedNode.data.shape === 'image');
@@ -954,6 +973,7 @@ function EditorCanvas({ diagram }) {
     const edgeTypes = useMemo(() => ({ workflowEdge: MemoWorkflowEdge }), []);
     const selectedNode = nodes.find((node) => node.id === selectedNodeId);
     const selectedEdge = edges.find((item) => item.id === selectedEdgeId);
+    const selectedNodes = nodes.filter((node) => node.selected);
     const snapshot = useCallback(() => ({ pages, activePageId }), [pages, activePageId]);
     const remember = useCallback(() => { setHistory((items) => [...items.slice(-39), snapshot()]); setFuture([]); setSaved(false); }, [snapshot]);
 
@@ -1004,14 +1024,16 @@ function EditorCanvas({ diagram }) {
         setEdges((items) => addEdge({ ...connection, id: `edge-${Date.now()}`, type: 'workflowEdge', data: { color: '#6d5dfc', lineStyle: 'dashed' }, markerEnd: { type: MarkerType.ArrowClosed, color: '#6d5dfc', width: 18, height: 18 } }, items));
     }, [remember]);
     const deleteSelection = useCallback(() => {
-        if (!selectedNodeId && !selectedEdgeId) return;
+        const selectedIds = selectedNodes.map((node) => node.id);
+        if (!selectedIds.length && !selectedNodeId && !selectedEdgeId) return;
         remember();
-        if (selectedNodeId) {
-            setNodes((items) => items.filter((node) => node.id !== selectedNodeId));
-            setEdges((items) => items.filter((item) => item.source !== selectedNodeId && item.target !== selectedNodeId));
+        if (selectedIds.length || selectedNodeId) {
+            const nodeIds = new Set(selectedIds.length ? selectedIds : [selectedNodeId]);
+            setNodes((items) => items.filter((node) => !nodeIds.has(node.id)));
+            setEdges((items) => items.filter((item) => !nodeIds.has(item.source) && !nodeIds.has(item.target)));
             setSelectedNodeId(null);
         } else { setEdges((items) => items.filter((item) => item.id !== selectedEdgeId)); setSelectedEdgeId(null); }
-    }, [selectedNodeId, selectedEdgeId, remember]);
+    }, [selectedNodes, selectedNodeId, selectedEdgeId, remember]);
     const undo = useCallback(() => {
         if (!history.length) return;
         const previous = history[history.length - 1];
@@ -1115,6 +1137,55 @@ function EditorCanvas({ diagram }) {
             return applyLayerIndexes(ordered);
         });
     }, [remember, setNodes]);
+
+    const clearSelection = useCallback(() => {
+        setNodes((items) => items.map((node) => node.selected ? { ...node, selected: false } : node));
+        setEdges((items) => items.map((edge) => edge.selected ? { ...edge, selected: false } : edge));
+        setSelectedNodeId(null);
+        setSelectedEdgeId(null);
+    }, [setNodes, setEdges]);
+
+    const selectSingleNode = useCallback((id) => {
+        setNodes((items) => items.map((node) => ({ ...node, selected: node.id === id })));
+        setEdges((items) => items.map((edge) => edge.selected ? { ...edge, selected: false } : edge));
+        setSelectedNodeId(id);
+        setSelectedEdgeId(null);
+    }, [setNodes, setEdges]);
+
+    const alignSelectedNodes = useCallback((direction) => {
+        if (selectedNodes.length < 2) return;
+        const liveNodes = new Map(flow.getNodes().map((node) => [node.id, node]));
+        const dimensions = selectedNodes.map((node) => {
+            const liveNode = liveNodes.get(node.id) || node;
+            return {
+                id: node.id,
+                x: node.position.x,
+                y: node.position.y,
+                width: Number(liveNode.measured?.width || liveNode.width || liveNode.style?.width) || 0,
+                height: Number(liveNode.measured?.height || liveNode.height || liveNode.style?.height) || 0,
+            };
+        });
+        const target = direction === 'left'
+            ? Math.min(...dimensions.map((node) => node.x))
+            : direction === 'right'
+                ? Math.max(...dimensions.map((node) => node.x + node.width))
+                : direction === 'top'
+                    ? Math.min(...dimensions.map((node) => node.y))
+                    : Math.max(...dimensions.map((node) => node.y + node.height));
+        const selectedIds = new Set(dimensions.map((node) => node.id));
+
+        remember();
+        setNodes((items) => items.map((node) => {
+            if (!selectedIds.has(node.id)) return node;
+            const size = dimensions.find((item) => item.id === node.id);
+            const position = { ...node.position };
+            if (direction === 'left') position.x = target;
+            if (direction === 'right') position.x = target - size.width;
+            if (direction === 'top') position.y = target;
+            if (direction === 'bottom') position.y = target - size.height;
+            return { ...node, position };
+        }));
+    }, [selectedNodes, flow, remember, setNodes]);
 
     useEffect(() => {
         const onKeyDown = (event) => {
@@ -1503,7 +1574,7 @@ function EditorCanvas({ diagram }) {
                     <Sidebar
                         onAddNode={addNodeFromSidebar} onUpload={uploadAsset} uploading={uploading}
                         collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} nodes={nodes}
-                        selectedNodeId={selectedNodeId} onSelectNode={(id) => { setSelectedNodeId(id); setSelectedEdgeId(null); }}
+                        selectedNodeId={selectedNodeId} onSelectNode={selectSingleNode}
                         onMoveLayer={moveLayer} onReorderLayer={reorderLayer}
                     />
                     <main className={`canvas-shell ${canvasExpanded ? 'is-expanded' : ''}`} ref={wrapperRef}>
@@ -1524,9 +1595,10 @@ function EditorCanvas({ diagram }) {
                             onNodeDragStart={() => { dragStart.current = snapshot(); }}
                             onNodeDragStop={() => { if (dragStart.current) { setHistory((items) => [...items.slice(-39), dragStart.current]); setFuture([]); setSaved(false); dragStart.current = null; } }}
                             onConnect={onConnect}
-                            onNodeClick={(_, node) => { setSelectedNodeId(node.id); setSelectedEdgeId(null); }}
-                            onEdgeClick={(_, item) => { setSelectedEdgeId(item.id); setSelectedNodeId(null); }}
-                            onPaneClick={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }}
+                            onSelectionChange={({ nodes: selectionNodes, edges: selectionEdges }) => {
+                                setSelectedNodeId(selectionNodes.length === 1 ? selectionNodes[0].id : null);
+                                setSelectedEdgeId(!selectionNodes.length && selectionEdges.length === 1 ? selectionEdges[0].id : null);
+                            }}
                             onInit={(instance) => {
                                 const viewport = pageViewports.current.get(activePage.id);
                                 if (viewport) requestAnimationFrame(() => restorePageViewport(activePage, viewport, instance));
@@ -1535,6 +1607,7 @@ function EditorCanvas({ diagram }) {
                             onDrop={onDrop} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
                             connectionMode={ConnectionMode.Loose} connectionLineStyle={{ stroke: '#6d5dfc', strokeWidth: 2.5, strokeDasharray: '8 7' }}
                             minZoom={0.25} maxZoom={2.5} fitView={!pageViewports.current.has(activePage.id)} fitViewOptions={{ padding: 0.24, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }} elevateNodesOnSelect={false}
+                            multiSelectionKeyCode={['Shift', 'Control', 'Meta']}
                         >
                             {(activePage.paperStyle || 'plain') === 'plain' && <Background color="#d8d8dd" gap={22} size={1.1} />}<Controls position="bottom-left" showInteractive={false} />
                             <MiniMap position="bottom-right" pannable zoomable nodeColor={(node) => node.data.color.value} maskColor="rgba(247,247,248,.78)" />
@@ -1544,7 +1617,9 @@ function EditorCanvas({ diagram }) {
                                 <ToolButton icon={Grid2X2} label="Fit view" onClick={() => flow.fitView({ padding: 0.25, duration: 300 })} />
                             </Panel>
                         </ReactFlow></ArtboardFrame>
-                        <PropertiesPanel selectedNode={selectedNode} selectedEdge={selectedEdge} onUpdateNode={updateNode} onUpdateEdge={updateEdge} onUpload={uploadAsset} uploading={uploading} onMoveLayer={moveLayer} onDelete={deleteSelection} onClose={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }} />
+                        {selectedNodes.length > 1
+                            ? <AlignmentPanel count={selectedNodes.length} onAlign={alignSelectedNodes} onClose={clearSelection} />
+                            : <PropertiesPanel selectedNode={selectedNode} selectedEdge={selectedEdge} onUpdateNode={updateNode} onUpdateEdge={updateEdge} onUpload={uploadAsset} uploading={uploading} onMoveLayer={moveLayer} onDelete={deleteSelection} onClose={clearSelection} />}
                         <PagesBar pages={pages} activePageId={activePageId} onSelect={selectPage} onAdd={addPage} onDuplicate={duplicatePage} onRename={renamePage} onDelete={deletePage} />
                     </main>
                 </div>
