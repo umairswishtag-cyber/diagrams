@@ -43,7 +43,7 @@ import '@fontsource/noto-naskh-arabic/700.css';
 import '@fontsource-variable/arimo/wght.css';
 import '@fontsource-variable/arimo/wght-italic.css';
 import {
-    AlignCenter, AlignLeft, AlignRight, AppWindow, ArrowDown, ArrowLeft, ArrowUp, Bold, Box,
+    AlignCenter, AlignHorizontalJustifyCenter, AlignHorizontalSpaceAround, AlignLeft, AlignRight, AlignVerticalJustifyCenter, AlignVerticalSpaceAround, AppWindow, ArrowDown, ArrowLeft, ArrowUp, Bold, Box,
     Braces, BringToFront, Check, ChevronDown, Circle as CircleIcon, Cloud, Code2, Copy,
     Database, Diamond, Download, FileText, GitBranch, Grid2X2, GripVertical,
     Image as ImageIcon, Italic, Layers3, List, ListOrdered, LogOut, Maximize2, Menu, MessageSquareText,
@@ -633,7 +633,7 @@ function LayerControls({ node, onMoveLayer }) {
     </div>;
 }
 
-function AlignmentPanel({ count, onAlign, onClose }) {
+function AlignmentPanel({ count, onAlign, onDistribute, onClose }) {
     return (
         <aside className="properties-panel selection-panel">
             <div className="properties-title">
@@ -641,11 +641,18 @@ function AlignmentPanel({ count, onAlign, onClose }) {
                 <button onClick={onClose} aria-label="Clear selection"><X size={17} /></button>
             </div>
             <span className="field-label">Align selection</span>
-            <div className="alignment-grid">
+            <div className="alignment-grid alignment-grid--three">
                 <button type="button" onClick={() => onAlign('left')} title="Align left edges"><AlignLeft size={17} /><span>Left</span></button>
+                <button type="button" onClick={() => onAlign('center')} title="Align horizontal centers"><AlignHorizontalJustifyCenter size={17} /><span>Center</span></button>
                 <button type="button" onClick={() => onAlign('right')} title="Align right edges"><AlignRight size={17} /><span>Right</span></button>
                 <button type="button" onClick={() => onAlign('top')} title="Align top edges"><PanelTop size={17} /><span>Top</span></button>
+                <button type="button" onClick={() => onAlign('middle')} title="Align vertical centers"><AlignVerticalJustifyCenter size={17} /><span>Middle</span></button>
                 <button type="button" onClick={() => onAlign('bottom')} title="Align bottom edges"><PanelBottom size={17} /><span>Bottom</span></button>
+            </div>
+            <span className="field-label">Equal space between</span>
+            <div className="alignment-grid">
+                <button type="button" disabled={count < 3} onClick={() => onDistribute('horizontal')} title="Distribute with equal horizontal spacing"><AlignHorizontalSpaceAround size={17} /><span>Horizontal</span></button>
+                <button type="button" disabled={count < 3} onClick={() => onDistribute('vertical')} title="Distribute with equal vertical spacing"><AlignVerticalSpaceAround size={17} /><span>Vertical</span></button>
             </div>
             <p className="selection-help">Hold Shift, Ctrl, or Cmd while clicking to select more shapes.</p>
         </aside>
@@ -1161,17 +1168,24 @@ function EditorCanvas({ diagram }) {
                 id: node.id,
                 x: node.position.x,
                 y: node.position.y,
-                width: Number(liveNode.measured?.width || liveNode.width || liveNode.style?.width) || 0,
-                height: Number(liveNode.measured?.height || liveNode.height || liveNode.style?.height) || 0,
+                width: Number.parseFloat(liveNode.measured?.width || liveNode.width || liveNode.style?.width) || 0,
+                height: Number.parseFloat(liveNode.measured?.height || liveNode.height || liveNode.style?.height) || 0,
             };
         });
-        const target = direction === 'left'
-            ? Math.min(...dimensions.map((node) => node.x))
-            : direction === 'right'
-                ? Math.max(...dimensions.map((node) => node.x + node.width))
-                : direction === 'top'
-                    ? Math.min(...dimensions.map((node) => node.y))
-                    : Math.max(...dimensions.map((node) => node.y + node.height));
+        const bounds = {
+            left: Math.min(...dimensions.map((node) => node.x)),
+            right: Math.max(...dimensions.map((node) => node.x + node.width)),
+            top: Math.min(...dimensions.map((node) => node.y)),
+            bottom: Math.max(...dimensions.map((node) => node.y + node.height)),
+        };
+        const target = {
+            left: bounds.left,
+            center: (bounds.left + bounds.right) / 2,
+            right: bounds.right,
+            top: bounds.top,
+            middle: (bounds.top + bounds.bottom) / 2,
+            bottom: bounds.bottom,
+        }[direction];
         const selectedIds = new Set(dimensions.map((node) => node.id));
 
         remember();
@@ -1180,10 +1194,51 @@ function EditorCanvas({ diagram }) {
             const size = dimensions.find((item) => item.id === node.id);
             const position = { ...node.position };
             if (direction === 'left') position.x = target;
+            if (direction === 'center') position.x = target - size.width / 2;
             if (direction === 'right') position.x = target - size.width;
             if (direction === 'top') position.y = target;
+            if (direction === 'middle') position.y = target - size.height / 2;
             if (direction === 'bottom') position.y = target - size.height;
             return { ...node, position };
+        }));
+    }, [selectedNodes, flow, remember, setNodes]);
+
+    const distributeSelectedNodes = useCallback((axis) => {
+        if (selectedNodes.length < 3) return;
+        const liveNodes = new Map(flow.getNodes().map((node) => [node.id, node]));
+        const horizontal = axis === 'horizontal';
+        const ordered = selectedNodes.map((node) => {
+            const liveNode = liveNodes.get(node.id) || node;
+            return {
+                id: node.id,
+                position: horizontal ? node.position.x : node.position.y,
+                size: Number.parseFloat(horizontal
+                    ? (liveNode.measured?.width || liveNode.width || liveNode.style?.width)
+                    : (liveNode.measured?.height || liveNode.height || liveNode.style?.height)) || 0,
+            };
+        }).sort((first, second) => first.position - second.position);
+        const first = ordered[0];
+        const last = ordered[ordered.length - 1];
+        const availableSpan = last.position + last.size - first.position;
+        const occupiedSpace = ordered.reduce((total, node) => total + node.size, 0);
+        const gap = (availableSpan - occupiedSpace) / (ordered.length - 1);
+        const positions = new Map();
+        let cursor = first.position;
+        ordered.forEach((node) => {
+            positions.set(node.id, cursor);
+            cursor += node.size + gap;
+        });
+
+        remember();
+        setNodes((items) => items.map((node) => {
+            if (!positions.has(node.id)) return node;
+            return {
+                ...node,
+                position: {
+                    ...node.position,
+                    ...(horizontal ? { x: positions.get(node.id) } : { y: positions.get(node.id) }),
+                },
+            };
         }));
     }, [selectedNodes, flow, remember, setNodes]);
 
@@ -1618,7 +1673,7 @@ function EditorCanvas({ diagram }) {
                             </Panel>
                         </ReactFlow></ArtboardFrame>
                         {selectedNodes.length > 1
-                            ? <AlignmentPanel count={selectedNodes.length} onAlign={alignSelectedNodes} onClose={clearSelection} />
+                            ? <AlignmentPanel count={selectedNodes.length} onAlign={alignSelectedNodes} onDistribute={distributeSelectedNodes} onClose={clearSelection} />
                             : <PropertiesPanel selectedNode={selectedNode} selectedEdge={selectedEdge} onUpdateNode={updateNode} onUpdateEdge={updateEdge} onUpload={uploadAsset} uploading={uploading} onMoveLayer={moveLayer} onDelete={deleteSelection} onClose={clearSelection} />}
                         <PagesBar pages={pages} activePageId={activePageId} onSelect={selectPage} onAdd={addPage} onDuplicate={duplicatePage} onRename={renamePage} onDelete={deletePage} />
                     </main>
